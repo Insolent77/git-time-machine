@@ -1,40 +1,22 @@
 # Roadmap
 
-## 0.1 — Browser MVP
+## Next
 
-- ZIP snapshots
-- File hash comparison
-- Text line deltas
-- Explainable commit inference
-- Timeline and exports
+- Password input for encrypted archives
+- Rename and moved-file detection
+- Editable inferred commit grouping
+- Save and reopen analysis sessions
+- AST-aware summaries for TypeScript, JavaScript, PHP and Python
+- Visual screenshot diff between project versions
+- Export a script that recreates reviewed commits in a real Git repository
+- CLI and desktop versions for archives beyond browser memory limits
+
+## Completed
+
+- Multi-version browser analysis
+- ZIP, RAR, 7Z, TAR, GZ, BZ2 and XZ support
+- Structured diagnostic errors
+- SHA-256 comparison and line delta estimation
+- Five interface languages
+- Detailed LOCAL commit dossiers
 - GitHub Pages deployment
-
-## 0.2 — Better reconstruction
-
-- File rename detection using content similarity
-- Editable commit titles and groups
-- Merge or split inferred commits
-- Project-type detection
-- Better dates inferred from archive names and file metadata
-
-## 0.3 — Larger projects
-
-- Web Workers
-- Streaming and memory limits
-- 7z support through WebAssembly
-- Optional RAR support where licensing and browser compatibility allow it
-
-## 0.4 — Semantic history
-
-- AST-aware code comparison
-- Function, class, endpoint, and database-model changes
-- Feature-level summaries instead of path-only grouping
-- Dependency risk and migration detection
-
-## 1.0 — Git reconstruction toolkit
-
-- CLI application
-- Reviewable commit plan
-- Export a new Git repository with inferred commit dates
-- Signed analysis manifest
-- Visual UI comparison from archived static builds

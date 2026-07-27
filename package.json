@@ -1,19 +1,22 @@
 {
   "name": "git-time-machine",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
-  "description": "Reconstruct a plausible development history from project archives — fully in the browser.",
+  "description": "Reconstruct a plausible development history from ZIP, RAR, 7Z, TAR and other project archives — fully in the browser.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "prepare:libarchive": "node scripts/copy-libarchive-assets.mjs",
+    "postinstall": "npm run prepare:libarchive",
+    "build": "npm run prepare:libarchive && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:core": "tsc -p tsconfig.core.json && node scripts/core-smoke.mjs"
   },
   "dependencies": {
     "jszip": "^3.10.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "libarchive.js": "^2.0.2"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

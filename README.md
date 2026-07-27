@@ -2,61 +2,48 @@
 
 > Reconstruct a plausible development history from old project archives — entirely in the browser.
 
-Git Time Machine compares multiple ZIP snapshots of the same project, detects file-level changes, estimates added and removed lines, groups related work into inferred commits, and exports a reviewable `CHANGELOG.md`.
+Git Time Machine compares dated snapshots of the same project, detects file-level changes, estimates text deltas, groups related work into inferred commits, and exports detailed `LOCAL-0001` style records.
 
-The application is designed for developers who inherited a project without Git history, kept dated backup archives, or need to document how a prototype evolved.
-
-## Why this project exists
-
-Real projects are not always born inside a clean Git repository. Freelancers and small teams often have folders named:
-
-```text
-project-final.zip
-project-final-2.zip
-project-21-07-updated.zip
-project-really-final.zip
-```
-
-Git Time Machine turns that archive pile into a structured, transparent reconstruction. It does **not** claim to recover the original commits; it creates an evidence-based draft that a developer can review and edit.
+It is intended for projects that evolved through backup folders and archives instead of a clean Git history. The result is an evidence-based reconstruction, not a claim that the original commits were recovered.
 
 ## Features
 
-- Multi-archive ZIP upload with editable version names and dates
-- 100% client-side processing; source code is not uploaded to a server
-- Automatic removal of a shared top-level archive folder
-- Ignores common generated folders such as `node_modules`, `.git`, `dist`, `build`, and caches
-- SHA-256 content comparison
-- Added, modified, and removed file detection
-- Text line delta estimation with a bounded LCS algorithm
-- Change classification: auth, database, admin, API, UI, styles, tests, docs, config, dependencies, assets
-- Inferred commit titles, descriptions, affected files, and confidence scores
-- Timeline, searchable file view, and Markdown preview
-- Export to `CHANGELOG.md`, full Markdown report, and JSON
-- Built-in demo mode
-- Five interface languages: English, Russian, Chinese, German, and Spanish
-- English default with locally remembered language preference
-- Experimental technical-poster interface inspired by editorial archive graphics
+- ZIP, RAR v4/v5, 7Z, TAR, TAR.GZ, TGZ, GZ, BZ2 and XZ input
+- 100% client-side analysis; project files are not uploaded
+- JSZip for ZIP and libarchive.js/WebAssembly for other formats
+- Precise diagnostic errors with code, archive name, reason, recovery hint and technical detail
+- Automatic exclusion of `.git`, `node_modules`, `vendor`, `dist`, `build`, caches and source maps
+- SHA-256 comparison for text and binary files
+- Added, modified and removed file detection
+- Approximate added/removed line counts for text files
+- Explainable grouping by auth, database, admin, API, UI, styles, tests, docs, config, dependencies and assets
+- Detailed commit dossiers with version number, domain, date/time zone, type, status, source, changes, files and verification notes
+- Editable domain, source and status metadata
+- Searchable file view and TXT/JSON exports
+- Five interface languages: English, Russian, Chinese, German and Spanish
+- Minimal black interface with an animated pointer-reactive Liquid Eye
 - Automatic GitHub Pages deployment
 
 ## Tech stack
 
-- React
-- TypeScript
-- Vite
+- React + TypeScript + Vite
 - JSZip
+- libarchive.js (WebAssembly + Web Worker)
 - Web Crypto API
 - GitHub Actions + GitHub Pages
 
 ## Local development
 
-Requirements: Node.js 22+
+Requires Node.js 22+.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Production build:
+`npm install` copies `worker-bundle.js` and `libarchive.wasm` from `libarchive.js` into the generated `public/libarchive/` directory.
+
+Production check:
 
 ```bash
 npm run test:core
@@ -64,79 +51,69 @@ npm run build
 npm run preview
 ```
 
-## Deploy to GitHub Pages
+## GitHub Pages
 
-The repository is preconfigured for a project named `git-time-machine`.
+The project is configured for a repository named `git-time-machine`.
 
-1. Create a GitHub repository named `git-time-machine`.
-2. Push this project to the `main` branch.
-3. Open **Settings → Pages**.
-4. Set **Source** to **GitHub Actions**.
-5. Open the **Actions** tab and wait for the deploy workflow to finish.
-
-The site URL will be:
+1. Push the project to the `main` branch.
+2. Open **Settings → Pages**.
+3. Select **GitHub Actions** as the source.
+4. Wait for the deployment workflow to finish.
 
 ```text
 https://YOUR_USERNAME.github.io/git-time-machine/
 ```
 
-For a different repository name, change `base` in `vite.config.ts`.
+For another repository name, change `base` in `vite.config.ts`.
 
-## How the inference works
+## How reconstruction works
 
-For every adjacent pair of snapshots, the analyzer:
+For each adjacent pair of snapshots, the analyzer:
 
-1. Builds a normalized map of project files.
-2. Compares SHA-256 hashes to detect changes.
-3. Estimates line additions and removals for text files.
-4. Categorizes file paths using explainable rules.
-5. Groups changes by category into inferred commits.
-6. Calculates a confidence score from path and group signals.
+1. Extracts and normalizes archive paths.
+2. Removes generated and dependency folders.
+3. Calculates SHA-256 hashes.
+4. Finds added, modified and removed files.
+5. Estimates line deltas for text files.
+6. Categorizes paths with deterministic rules.
+7. Groups related paths into inferred commits.
+8. Generates evidence-based verification notes and a confidence score.
 
-This is intentionally deterministic and explainable. No external AI API is required.
+No uploaded code is executed and no external AI API is required.
 
-## Privacy and limits
+## Limits
 
-- Files stay in the browser.
-- Classic ZIP files are supported in the MVP.
-- Encrypted and multi-volume archives are not supported.
-- RAR and 7z are planned.
-- Archives are limited to 200 MB, individual files to 12 MB, and 6,000 entries.
-- Generated folders are ignored to reduce noise and browser memory usage.
-- The reconstructed history is a hypothesis, not cryptographic proof of authorship or the original commit sequence.
+- Maximum archive size: 300 MB
+- Maximum entries per archive: 8,000
+- Files larger than 16 MB are skipped
+- Text content is read up to 2 MB per file
+- Password-protected archives are detected but password input is not implemented yet
+- Multi-volume archives may not be readable
+- Browser memory remains the practical limit for large compressed archives
+- Reconstructed commits require human review
 
-## Roadmap
+## Font
 
-- [ ] RAR and 7z support through WebAssembly
-- [ ] Web Worker processing for very large archives
-- [ ] Drag-and-drop version reordering
-- [ ] Semantic AST diff for TypeScript, JavaScript, PHP, and Python
-- [ ] Rename detection
-- [ ] Screenshot-based visual UI diff
-- [ ] Export a shell script that recreates inferred Git commits
-- [ ] Editable commit grouping and titles
-- [ ] Save and reopen analysis sessions
-- [ ] CLI version
+The interface requests the locally installed `DXDoklad10M` font and falls back to a system monospace font. A font binary is not included in this repository.
 
 ## Project structure
 
 ```text
 src/
   lib/
-    analyzer.ts   # deterministic comparison and commit inference
-    demo.ts       # built-in example snapshots
-    download.ts   # browser exports
-    types.ts      # domain model
-    zip.ts        # secure browser-side ZIP processing
-  App.tsx         # product UI
-  i18n.ts          # five-language interface and localized exports
-  styles.css      # responsive technical-poster visual system
+    analyzer.ts          # deterministic comparison and commit inference
+    archive-errors.ts    # structured diagnostic errors
+    demo.ts              # built-in example snapshots
+    download.ts          # browser exports
+    types.ts             # domain model
+    zip.ts               # ZIP + libarchive.js extraction pipeline
+  App.tsx                # minimal product interface
+  i18n.ts                # five languages and detailed commit export
+  styles.css             # black liquid-glass visual system
+scripts/
+  copy-libarchive-assets.mjs
 ```
-
-## Safety notes
-
-Archive contents are treated as data. The app does not execute uploaded code. Paths are normalized, traversal segments are removed, and oversized entries are skipped.
 
 ## License
 
-MIT
+MIT. libarchive.js is used under its MIT license; libarchive is BSD-licensed.

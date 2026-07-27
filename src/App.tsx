@@ -1,27 +1,28 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import { analyzeSnapshots, formatBytes } from './lib/analyzer'
+import { ArchiveAnalysisError, normalizeArchiveError } from './lib/archive-errors'
 import { copyText, downloadText } from './lib/download'
 import { makeDemoSnapshots } from './lib/demo'
-import type {
-  AnalysisReport,
-  ChangeCategory,
-  ChangeStatus,
-  FileChange,
-  VersionTransition,
-} from './lib/types'
-import { parseZipArchive, type ArchiveProgress } from './lib/zip'
+import type { AnalysisReport, ChangeStatus } from './lib/types'
+import {
+  ARCHIVE_ACCEPT,
+  SUPPORTED_ARCHIVE_EXTENSIONS,
+  archiveExtension,
+  isSupportedArchive,
+  parseProjectArchive,
+  type ArchiveProgress,
+} from './lib/zip'
 import {
   COPY,
   LANGUAGE_OPTIONS,
-  buildLocalizedChangelog,
-  buildLocalizedMarkdownReport,
+  archiveErrorHint,
+  buildCommitDossier,
+  buildDetailedReport,
   categoryLabel,
-  commitDescription,
-  commitTitle,
-  fill,
   formatLocalizedDate,
   lineDeltaLabel,
   statusLabel,
+  type CommitStatusMode,
   type Language,
 } from './i18n'
 
@@ -32,15 +33,13 @@ type ArchiveItem = {
   date: string
 }
 
-type Tab = 'timeline' | 'files' | 'report'
+type View = 'commits' | 'files' | 'export'
 type StatusFilter = 'all' | ChangeStatus
+type IssueState = { severity: 'error' | 'warning'; error: ArchiveAnalysisError }
 
 function inputDate(timestamp: number): string {
   const date = new Date(timestamp || Date.now())
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function archiveId(file: File): string {
@@ -51,12 +50,13 @@ function dateToIso(value: string): string {
   return new Date(`${value}T12:00:00`).toISOString()
 }
 
-function moveItem<T>(items: T[], from: number, to: number): T[] {
-  if (to < 0 || to >= items.length) return items
-  const result = [...items]
-  const [item] = result.splice(from, 1)
-  result.splice(to, 0, item)
-  return result
+function labelFromFile(fileName: string): string {
+  const extension = archiveExtension(fileName)
+  return fileName
+    .slice(0, extension ? -extension.length : undefined)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function getInitialLanguage(): Language {
@@ -64,129 +64,36 @@ function getInitialLanguage(): Language {
   return LANGUAGE_OPTIONS.some((option) => option.code === saved) ? saved as Language : 'en'
 }
 
-function Metric({ value, label, index }: { value: string | number; label: string; index: string }) {
-  return (
-    <article className="metric">
-      <span>{index}</span>
-      <strong>{value}</strong>
-      <small>{label}</small>
-    </article>
-  )
-}
+function LiquidEye() {
+  const eyeRef = useRef<HTMLDivElement | null>(null)
 
-function ChangeBadge({ status, language }: { status: ChangeStatus; language: Language }) {
-  return <span className={`status-label status-${status}`}>{statusLabel(language, status)}</span>
-}
-
-function CategoryBadge({ category, language }: { category: ChangeCategory; language: Language }) {
-  return <span className="category-label">{categoryLabel(language, category)}</span>
-}
-
-function FileChangeRow({ change, language }: { change: FileChange; language: Language }) {
-  return (
-    <div className="file-change-row">
-      <div className="file-main">
-        <ChangeBadge status={change.status} language={language} />
-        <code title={change.path}>{change.path}</code>
-      </div>
-      <div className="file-meta">
-        <CategoryBadge category={change.category} language={language} />
-        <span>{lineDeltaLabel(change, language, formatBytes)}</span>
-      </div>
-    </div>
-  )
-}
-
-function TimelineTransition({ transition, language }: { transition: VersionTransition; language: Language }) {
-  const c = COPY[language]
+  useEffect(() => {
+    let frame = 0
+    const onPointerMove = (event: PointerEvent) => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const x = (event.clientX / Math.max(window.innerWidth, 1) - 0.5) * 18
+        const y = (event.clientY / Math.max(window.innerHeight, 1) - 0.5) * 12
+        eyeRef.current?.style.setProperty('--look-x', `${x}px`)
+        eyeRef.current?.style.setProperty('--look-y', `${y}px`)
+        document.documentElement.style.setProperty('--pointer-x', `${event.clientX}px`)
+        document.documentElement.style.setProperty('--pointer-y', `${event.clientY}px`)
+      })
+    }
+    window.addEventListener('pointermove', onPointerMove, { passive: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('pointermove', onPointerMove)
+    }
+  }, [])
 
   return (
-    <section className="timeline-transition">
-      <div className="timeline-marker" aria-hidden="true">
-        <span>{formatLocalizedDate(transition.to.capturedAt, language).slice(0, 2)}</span>
+    <div className="liquid-eye-wrap" aria-hidden="true">
+      <div className="liquid-eye" ref={eyeRef}>
+        <div className="eye-reflection" />
+        <div className="eye-iris"><span /></div>
       </div>
-      <div className="transition-body">
-        <header className="transition-header">
-          <div>
-            <span className="micro-label">{c.version} / {formatLocalizedDate(transition.to.capturedAt, language)}</span>
-            <h3>{transition.to.label}</h3>
-            <p>{fill(c.inferredFrom, { from: transition.from.label, count: transition.commits.length })}</p>
-          </div>
-          <div className="transition-stats" aria-label="File changes">
-            <span>+{transition.stats.filesAdded}</span>
-            <span>~{transition.stats.filesModified}</span>
-            <span>−{transition.stats.filesRemoved}</span>
-          </div>
-        </header>
-
-        {transition.commits.length === 0 ? (
-          <p className="empty-line">{c.noChanges}</p>
-        ) : (
-          <div className="commit-list">
-            {transition.commits.map((commit, index) => (
-              <details className="commit-row" key={commit.id} open={index === 0}>
-                <summary>
-                  <span className="commit-number">{String(index + 1).padStart(2, '0')}</span>
-                  <div className="commit-copy">
-                    <div>
-                      <h4>{commitTitle(language, commit.category)}</h4>
-                      <CategoryBadge category={commit.category} language={language} />
-                    </div>
-                    <p>{commitDescription(language, commit)}</p>
-                  </div>
-                  <div className="confidence" title={c.confidenceHint}>
-                    <strong>{commit.confidence}</strong>
-                    <span>% {c.confidence}</span>
-                  </div>
-                </summary>
-                <div className="commit-files">
-                  {commit.changes.map((change) => (
-                    <FileChangeRow key={`${commit.id}-${change.path}`} change={change} language={language} />
-                  ))}
-                </div>
-              </details>
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-function ArchiveSculpture({ language }: { language: Language }) {
-  const c = COPY[language]
-  return (
-    <div className="archive-sculpture" aria-label={c.diagramLabel}>
-      <svg className="connector-map" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M110 160 L500 310 L858 92" />
-        <path d="M206 510 L500 340 L890 410" />
-        <path d="M500 80 L500 610" />
-        <path d="M500 330 L770 590" />
-      </svg>
-
-      <div className="map-node node-a"><i />V.01</div>
-      <div className="map-node node-b"><i />SHA.256</div>
-      <div className="map-node node-c"><i />Δ.033</div>
-      <div className="map-node node-d"><i />MD.OUT</div>
-
-      <div className="signal-cloud" aria-hidden="true">
-        {Array.from({ length: 19 }, (_, index) => <span key={index} />)}
-      </div>
-      <div className="beam beam-a"><span>ARCHIVE / 01</span></div>
-      <div className="beam beam-b"><span>ARCHIVE / 02</span></div>
-      <div className="beam beam-c"><span>ARCHIVE / 03</span></div>
-      <div className="core-node"><span>GTM</span><small>REBUILD</small></div>
-
-      <div className="diagram-caption">
-        <span>{c.diagramLabel}</span>
-        <strong>NO. 02</strong>
-      </div>
-      <div className="diagram-legend">
-        <span><b>01</b>{c.diagramVersion}</span>
-        <span><b>02</b>{c.diagramFiles}</span>
-        <span><b>03</b>{c.diagramCommits}</span>
-        <span><b>04</b>{c.diagramConfidence}</span>
-      </div>
+      <span className="eye-caption">WATCHING DIFF / LOCAL ONLY</span>
     </div>
   )
 }
@@ -195,14 +102,20 @@ function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [archives, setArchives] = useState<ArchiveItem[]>([])
   const [report, setReport] = useState<AnalysisReport | null>(null)
-  const [tab, setTab] = useState<Tab>('timeline')
+  const [view, setView] = useState<View>('commits')
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [progress, setProgress] = useState<ArchiveProgress | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [issue, setIssue] = useState<IssueState | null>(null)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [copied, setCopied] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [domain, setDomain] = useState(() => window.localStorage.getItem('gtm-domain') ?? '')
+  const [sourceNote, setSourceNote] = useState(() => window.localStorage.getItem('gtm-source-note') ?? '')
+  const [commitStatus, setCommitStatus] = useState<CommitStatusMode>(() => {
+    const value = window.localStorage.getItem('gtm-commit-status')
+    return value === 'implemented' || value === 'verified' ? value : 'reconstructed'
+  })
   const c = COPY[language]
 
   useEffect(() => {
@@ -210,55 +123,77 @@ function App() {
     window.localStorage.setItem('gtm-language', language)
   }, [language])
 
-  const changelog = useMemo(
-    () => report ? buildLocalizedChangelog(report, language) : '',
-    [report, language],
-  )
-  const markdownReport = useMemo(
-    () => report ? buildLocalizedMarkdownReport(report, language, formatBytes) : '',
-    [report, language],
-  )
+  useEffect(() => {
+    window.localStorage.setItem('gtm-domain', domain)
+    window.localStorage.setItem('gtm-source-note', sourceNote)
+    window.localStorage.setItem('gtm-commit-status', commitStatus)
+  }, [domain, sourceNote, commitStatus])
 
-  const filteredTransitions = useMemo(() => {
+  const commitRows = useMemo(() => {
     if (!report) return []
-    const normalizedQuery = query.trim().toLowerCase()
-    return report.transitions
-      .map((transition) => ({
-        ...transition,
-        changes: transition.changes.filter((change) => {
-          const statusMatches = statusFilter === 'all' || change.status === statusFilter
-          const queryMatches = !normalizedQuery || change.path.toLowerCase().includes(normalizedQuery)
-          return statusMatches && queryMatches
-        }),
-      }))
-      .filter((transition) => transition.changes.length > 0)
-  }, [report, query, statusFilter])
+    let serial = 1
+    return report.transitions.flatMap((transition) => transition.commits.map((commit) => ({
+      transition,
+      commit,
+      serial: serial++,
+    })))
+  }, [report])
 
-  function changeLanguage(nextLanguage: Language) {
-    setLanguage(nextLanguage)
-    setError(null)
-  }
+  const detailedReport = useMemo(() => report ? buildDetailedReport({
+    report,
+    language,
+    domain,
+    sourceNote,
+    status: commitStatus,
+  }) : '', [report, language, domain, sourceNote, commitStatus])
+
+  const filteredChanges = useMemo(() => {
+    if (!report) return []
+    const needle = query.trim().toLowerCase()
+    return report.transitions.flatMap((transition) => transition.changes
+      .filter((change) => (statusFilter === 'all' || change.status === statusFilter)
+        && (!needle || change.path.toLowerCase().includes(needle)))
+      .map((change) => ({ transition, change })))
+  }, [report, query, statusFilter])
 
   function addFiles(fileList: FileList | File[]) {
     const incoming = Array.from(fileList)
-    const zipFiles = incoming.filter((file) => file.name.toLowerCase().endsWith('.zip'))
+    const supported = incoming.filter((file) => isSupportedArchive(file.name))
+    const unsupported = incoming.filter((file) => !isSupportedArchive(file.name))
 
-    if (!zipFiles.length) {
-      setError(c.zipOnlyError)
+    if (!supported.length) {
+      setIssue({
+        severity: 'error',
+        error: new ArchiveAnalysisError({
+          code: 'UNSUPPORTED_FORMAT',
+          archiveName: unsupported[0]?.name ?? '—',
+          message: c.unsupportedSelected,
+          technical: `${c.skippedFiles}: ${unsupported.map((file) => file.name).join(', ')}. Supported: ${SUPPORTED_ARCHIVE_EXTENSIONS.join(', ')}`,
+        }),
+      })
       return
     }
 
-    setError(incoming.length === zipFiles.length ? null : c.someSkippedError)
     setReport(null)
     setArchives((current) => [
       ...current,
-      ...zipFiles.map((file) => ({
+      ...supported.map((file) => ({
         id: archiveId(file),
         file,
-        label: file.name.replace(/\.zip$/i, '').replace(/[_-]+/g, ' ').trim(),
+        label: labelFromFile(file.name) || file.name,
         date: inputDate(file.lastModified),
       })),
     ])
+
+    setIssue(unsupported.length ? {
+      severity: 'warning',
+      error: new ArchiveAnalysisError({
+        code: 'UNSUPPORTED_FORMAT',
+        archiveName: unsupported[0].name,
+        message: c.unsupportedSelected,
+        technical: `${c.skippedFiles}: ${unsupported.map((file) => file.name).join(', ')}`,
+      }),
+    } : null)
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -269,28 +204,35 @@ function App() {
 
   async function runAnalysis() {
     if (archives.length < 2) {
-      setError(c.minimumError)
+      setIssue({
+        severity: 'error',
+        error: new ArchiveAnalysisError({ code: 'UNKNOWN', archiveName: '—', message: c.errorMinimum }),
+      })
       return
     }
 
     setBusy(true)
-    setError(null)
+    setIssue(null)
     setReport(null)
 
     try {
       const snapshots = []
       for (const archive of archives) {
-        snapshots.push(await parseZipArchive(archive.file, {
-          label: archive.label,
-          capturedAt: dateToIso(archive.date),
-          onProgress: setProgress,
-        }))
+        try {
+          snapshots.push(await parseProjectArchive(archive.file, {
+            label: archive.label,
+            capturedAt: dateToIso(archive.date),
+            onProgress: setProgress,
+          }))
+        } catch (error) {
+          throw normalizeArchiveError(error, archive.file.name)
+        }
       }
       setReport(analyzeSnapshots(snapshots))
-      setTab('timeline')
+      setView('commits')
       requestAnimationFrame(() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' }))
-    } catch {
-      setError(c.analysisError)
+    } catch (error) {
+      setIssue({ severity: 'error', error: normalizeArchiveError(error, progress?.archive ?? '—') })
     } finally {
       setBusy(false)
       setProgress(null)
@@ -298,246 +240,216 @@ function App() {
   }
 
   function runDemo() {
-    setError(null)
+    setIssue(null)
     setArchives([])
     setReport(analyzeSnapshots(makeDemoSnapshots()))
-    setTab('timeline')
+    setView('commits')
     requestAnimationFrame(() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' }))
   }
 
-  async function copyChangelog() {
+  async function copyCommit(id: string, text: string) {
     try {
-      await copyText(changelog)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
+      await copyText(text)
+      setCopiedId(id)
+      window.setTimeout(() => setCopiedId(null), 1500)
     } catch {
-      setError(c.copyError)
+      setIssue({ severity: 'error', error: new ArchiveAnalysisError({ code: 'UNKNOWN', archiveName: '—', message: c.errorCopy }) })
     }
   }
 
   function reset() {
     setArchives([])
     setReport(null)
-    setError(null)
+    setIssue(null)
     setProgress(null)
     setQuery('')
     setStatusFilter('all')
   }
 
+  const progressText = progress?.stage === 'opening'
+    ? c.progressOpening
+    : progress?.stage === 'extracting'
+      ? c.progressExtracting
+      : c.progressHashing
+
   return (
     <div className="app-shell">
-      <header className="poster-header">
-        <a className="poster-brand" href="#top" aria-label="Git Time Machine">
-          <span>GTM</span>
-          <div><strong>Git Time Machine</strong><small>{c.brandSubtitle}</small></div>
-        </a>
-        <div className="header-code">{c.projectCode}<br /><span>CLIENT-SIDE / OPEN SOURCE</span></div>
+      <header className="topbar">
+        <a href="#top" className="wordmark">GTM<span>/04</span></a>
         <nav className="language-switch" aria-label="Language">
           {LANGUAGE_OPTIONS.map((option) => (
-            <button
-              key={option.code}
-              className={language === option.code ? 'active' : ''}
-              type="button"
-              title={option.name}
-              aria-pressed={language === option.code}
-              onClick={() => changeLanguage(option.code)}
-            >
+            <button key={option.code} className={language === option.code ? 'active' : ''} type="button" onClick={() => setLanguage(option.code)} title={option.name}>
               {option.short}
             </button>
           ))}
         </nav>
-        <a className="source-link" href="https://github.com/Insolent77/git-time-machine" target="_blank" rel="noreferrer">{c.sourceCode}</a>
+        <a className="github-link" href="https://github.com/Insolent77/git-time-machine" target="_blank" rel="noreferrer">{c.sourceCode} ↗</a>
       </header>
 
       <main id="top">
-        <section className="poster-hero">
-          <div className="hero-heading">
-            <span className="hero-hash">#</span>
-            <div>
-              <p>{c.heroKicker}</p>
-              <h1>{c.heroTitleA}<br /><em>{c.heroTitleB}</em></h1>
-            </div>
-          </div>
-
-          <div className="hero-description">
-            <span>{c.browserOnly}</span>
+        <section className="hero">
+          <div className="hero-copy">
+            <span className="eyebrow">{c.tagline} / {c.buildLabel}</span>
+            <h1>{c.heroTitle}</h1>
             <p>{c.heroText}</p>
             <div className="hero-actions">
-              <a className="solid-action" href="#workspace">{c.uploadVersions}</a>
-              <button className="line-action" type="button" onClick={runDemo}>{c.openDemo}</button>
+              <a className="primary-action" href="#upload">{c.upload} <span>↘</span></a>
+              <button className="text-action" type="button" onClick={runDemo}>{c.demo}</button>
             </div>
+            <small>{c.localOnly}</small>
           </div>
-
-          <div className="hero-features">
-            <span><b>01</b>{c.zipProcessing}</span>
-            <span><b>02</b>{c.hashCompare}</span>
-            <span><b>03</b>{c.markdownExport}</span>
-          </div>
-
-          <ArchiveSculpture language={language} />
-          <p className="vertical-claim">{c.verticalClaim}</p>
-
-          <div className="protocol-strip">
-            <div><small>{c.inputLabel}</small><strong>02+</strong><span>// {c.archivesUnit}</span></div>
-            <div><small>{c.outputLabel}</small><strong>01</strong><span>// {c.historyUnit}</span></div>
-          </div>
+          <LiquidEye />
+          <div className="format-ticker"><span>{c.supported}</span><span>{c.supported}</span></div>
         </section>
 
-        <section className="workspace" id="workspace">
-          <aside className="section-index">
-            <span>01</span>
-            <small>{c.workspaceKicker}</small>
-          </aside>
-          <div className="section-content">
-            <header className="section-header">
-              <div><h2>{c.workspaceTitle}</h2><p>{c.workspaceText}</p></div>
-              {archives.length > 0 && <button className="plain-link danger" type="button" onClick={reset}>{c.clearAll}</button>}
-            </header>
+        <section className="upload-section" id="upload">
+          <header className="section-line">
+            <span>01</span><h2>{c.versions}</h2><small>{archives.length || '00'}</small>
+          </header>
 
-            <div
-              className={`dropzone ${dragging ? 'is-dragging' : ''}`}
-              onDragEnter={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(true) }}
-              onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()}
-              onDragLeave={() => setDragging(false)}
-              onDrop={onDrop}
-            >
-              <div className="drop-symbol">[ + ]</div>
-              <div><h3>{c.dropTitle}</h3><p>{c.dropText}</p></div>
-              <label className="outline-action">
-                {c.chooseArchives}
-                <input type="file" accept=".zip,application/zip" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => event.target.files && addFiles(event.target.files)} />
-              </label>
-              <small>{c.uploadLimit}</small>
-            </div>
-
-            {error && <div className="error-line"><strong>{c.errorPrefix}</strong> {error}</div>}
-
-            {archives.length > 0 && (
-              <div className="archive-editor">
-                <div className="archive-editor-head">
-                  <div><strong>{fill(c.selectedVersions, { count: archives.length })}</strong><span>{c.orderHint}</span></div>
-                  <button className="plain-link" type="button" onClick={() => setArchives((items) => [...items].sort((left, right) => left.date.localeCompare(right.date)))}>{c.sortByDate}</button>
-                </div>
-
-                <div className="archive-list">
-                  {archives.map((archive, index) => (
-                    <div className="archive-row" key={archive.id}>
-                      <div className="archive-order">
-                        <strong>{String(index + 1).padStart(2, '0')}</strong>
-                        <div>
-                          <button type="button" disabled={index === 0} onClick={() => setArchives((items) => moveItem(items, index, index - 1))}>↑</button>
-                          <button type="button" disabled={index === archives.length - 1} onClick={() => setArchives((items) => moveItem(items, index, index + 1))}>↓</button>
-                        </div>
-                      </div>
-                      <div className="archive-file"><span>ZIP</span><div><strong>{archive.file.name}</strong><small>{formatBytes(archive.file.size)}</small></div></div>
-                      <label><span>{c.versionName}</span><input value={archive.label} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, label: event.target.value } : item))} /></label>
-                      <label><span>{c.versionDate}</span><input type="date" value={archive.date} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, date: event.target.value } : item))} /></label>
-                      <button className="remove-archive" type="button" aria-label={fill(c.removeArchive, { name: archive.file.name })} onClick={() => setArchives((items) => items.filter((item) => item.id !== archive.id))}>×</button>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="analysis-bar">
-                  <div><strong>{archives.length >= 2 ? c.readyTitle : c.needAnotherTitle}</strong><span>{archives.length >= 2 ? c.readyText : c.needAnotherText}</span></div>
-                  <button className="solid-action" type="button" disabled={busy || archives.length < 2} onClick={runAnalysis}>{busy ? c.analyzing : c.reconstruct}</button>
-                </div>
-
-                {busy && progress && (
-                  <div className="progress-line">
-                    <div><strong>{progress.archive}</strong><span>{progress.currentPath ?? c.finishing}</span></div>
-                    <div className="progress-track"><span style={{ width: `${progress.total ? Math.round(progress.processed / progress.total * 100) : 0}%` }} /></div>
-                    <small>{progress.processed} / {progress.total}</small>
-                  </div>
-                )}
-              </div>
-            )}
+          <div
+            className={`dropzone ${dragging ? 'dragging' : ''}`}
+            onDragEnter={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(true) }}
+            onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
+            <strong>{archives.length ? c.addAnother : c.dropHint}</strong>
+            <span>{c.supported}</span>
+            <label className="primary-action">
+              {c.selectFiles} <span>＋</span>
+              <input type="file" accept={ARCHIVE_ACCEPT} multiple onChange={(event: ChangeEvent<HTMLInputElement>) => event.target.files && addFiles(event.target.files)} />
+            </label>
           </div>
+
+          {issue && (
+            <section className={`diagnostic ${issue.severity}`} role={issue.severity === 'error' ? 'alert' : 'status'}>
+              <header><strong>{c.errorTitle}</strong><code>{issue.error.code}</code></header>
+              <dl>
+                <div><dt>{c.archive}</dt><dd>{issue.error.archiveName || '—'}</dd></div>
+                <div><dt>{c.reason}</dt><dd>{issue.error.message}</dd></div>
+                <div><dt>{c.howToFix}</dt><dd>{archiveErrorHint(language, issue.error)}</dd></div>
+                {(issue.error.path || issue.error.technical) && <div><dt>{c.technical}</dt><dd>{issue.error.path ? `${issue.error.path}. ` : ''}{issue.error.technical}</dd></div>}
+              </dl>
+            </section>
+          )}
+
+          {archives.length > 0 && (
+            <div className="archive-list">
+              {archives.map((archive, index) => (
+                <div className="archive-row" key={archive.id}>
+                  <span className="archive-index">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="archive-type">{archiveExtension(archive.file.name).replace('.', '').toUpperCase()}</span>
+                  <div className="archive-name"><strong>{archive.file.name}</strong><small>{formatBytes(archive.file.size)}</small></div>
+                  <label><span>{c.versionLabel}</span><input value={archive.label} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, label: event.target.value } : item))} /></label>
+                  <label><span>{c.captureDate}</span><input type="date" value={archive.date} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, date: event.target.value } : item))} /></label>
+                  <div className="row-actions">
+                    <button type="button" title={c.moveUp} disabled={index === 0} onClick={() => setArchives((items) => {
+                      const next = [...items]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next
+                    })}>↑</button>
+                    <button type="button" title={c.moveDown} disabled={index === archives.length - 1} onClick={() => setArchives((items) => {
+                      const next = [...items]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; return next
+                    })}>↓</button>
+                    <button type="button" title={c.remove} onClick={() => setArchives((items) => items.filter((item) => item.id !== archive.id))}>×</button>
+                  </div>
+                </div>
+              ))}
+
+              <details className="metadata-settings">
+                <summary>{c.commitSettings} <span>＋</span></summary>
+                <div>
+                  <label><span>{c.projectDomain} / {c.optional}</span><input placeholder="admin.example.com" value={domain} onChange={(event: ChangeEvent<HTMLInputElement>) => setDomain(event.target.value)} /></label>
+                  <label><span>{c.sourceNote} / {c.optional}</span><input placeholder="User request / task / archive source" value={sourceNote} onChange={(event: ChangeEvent<HTMLInputElement>) => setSourceNote(event.target.value)} /></label>
+                  <label><span>{c.status}</span><select value={commitStatus} onChange={(event: ChangeEvent<HTMLSelectElement>) => setCommitStatus(event.target.value as CommitStatusMode)}><option value="reconstructed">{c.statusReconstructed}</option><option value="implemented">{c.statusImplemented}</option><option value="verified">{c.statusVerified}</option></select></label>
+                </div>
+              </details>
+
+              <div className="analysis-command">
+                <div><strong>{archives.length >= 2 ? `${archives.length} / READY` : c.needTwo}</strong><small>{c.localOnly}</small></div>
+                <button className="primary-action" type="button" disabled={busy || archives.length < 2} onClick={runAnalysis}>{busy ? `${c.analyzing}…` : c.analyze}<span>→</span></button>
+                <button className="text-action danger" type="button" onClick={reset}>{c.clear}</button>
+              </div>
+
+              {busy && progress && (
+                <div className="progress">
+                  <div><strong>{progressText}</strong><span>{progress.archive}</span><small>{progress.currentPath}</small></div>
+                  <i><span style={{ width: `${progress.total ? Math.round(progress.processed / progress.total * 100) : 8}%` }} /></i>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {report && (
-          <section className="results" id="results">
-            <aside className="section-index"><span>02</span><small>{c.resultKicker}</small></aside>
-            <div className="section-content">
-              <header className="section-header result-header">
-                <div><h2>{c.resultTitle}</h2><p>{c.resultText}</p></div>
-                <div className="export-actions">
-                  <button className="line-action" type="button" onClick={() => downloadText('git-time-machine-report.json', JSON.stringify(report, null, 2), 'application/json')}>JSON</button>
-                  <button className="line-action" type="button" onClick={() => downloadText('ANALYSIS.md', markdownReport, 'text/markdown;charset=utf-8')}>{c.exportReport}</button>
-                  <button className="solid-action" type="button" onClick={() => downloadText('CHANGELOG.md', changelog, 'text/markdown;charset=utf-8')}>{c.downloadChangelog}</button>
-                </div>
-              </header>
+          <section className="results-section" id="results">
+            <header className="section-line">
+              <span>02</span><h2>{c.results}</h2><small>{report.totals.inferredCommits}</small>
+            </header>
 
-              <div className="metrics">
-                <Metric index="01" value={report.snapshots.length} label={c.metricVersions} />
-                <Metric index="02" value={report.totals.inferredCommits} label={c.metricCommits} />
-                <Metric index="03" value={`+${report.totals.linesAdded}`} label={c.metricAdded} />
-                <Metric index="04" value={`−${report.totals.linesRemoved}`} label={c.metricRemoved} />
-                <Metric index="05" value={report.totals.analyzedFiles} label={c.metricFiles} />
+            <nav className="view-switch">
+              {(['commits', 'files', 'export'] as View[]).map((item) => (
+                <button type="button" key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>
+                  {item === 'commits' ? c.commits : item === 'files' ? c.files : c.export}
+                </button>
+              ))}
+            </nav>
+
+            {view === 'commits' && (
+              <div className="commit-stream">
+                {commitRows.length ? commitRows.map(({ transition, commit, serial }, index) => {
+                  const id = `${transition.id}-${commit.id}`
+                  const dossier = buildCommitDossier({ transition, commit, serial, language, domain, sourceNote, status: commitStatus })
+                  return (
+                    <details className="commit-entry" key={id} open={index === 0}>
+                      <summary>
+                        <span>LOCAL-{String(serial).padStart(4, '0')}</span>
+                        <strong>{categoryLabel(language, commit.category)}</strong>
+                        <small>{formatLocalizedDate(transition.to.capturedAt, language)} · {commit.confidence}% {c.confidence}</small>
+                        <i>＋</i>
+                      </summary>
+                      <div className="commit-content">
+                        <div className="commit-toolbar"><span>{c.detailedCommit}</span><button type="button" onClick={() => copyCommit(id, dossier)}>{copiedId === id ? c.copied : c.copy}</button></div>
+                        <pre>{dossier}</pre>
+                      </div>
+                    </details>
+                  )
+                }) : <p className="empty-result">{c.noChanges}</p>}
               </div>
+            )}
 
-              <div className="result-nav" role="tablist">
-                <button className={tab === 'timeline' ? 'active' : ''} type="button" onClick={() => setTab('timeline')}>01 / {c.tabTimeline}</button>
-                <button className={tab === 'files' ? 'active' : ''} type="button" onClick={() => setTab('files')}>02 / {c.tabFiles}</button>
-                <button className={tab === 'report' ? 'active' : ''} type="button" onClick={() => setTab('report')}>03 / {c.tabChangelog}</button>
+            {view === 'files' && (
+              <div className="files-view">
+                <div className="file-filters">
+                  <input value={query} onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} placeholder={c.search} />
+                  <select value={statusFilter} onChange={(event: ChangeEvent<HTMLSelectElement>) => setStatusFilter(event.target.value as StatusFilter)}><option value="all">{c.all}</option><option value="added">{c.added}</option><option value="modified">{c.modified}</option><option value="removed">{c.removed}</option></select>
+                </div>
+                {filteredChanges.length ? filteredChanges.map(({ transition, change }) => (
+                  <div className="file-row" key={`${transition.id}-${change.path}`}>
+                    <span className={`file-status ${change.status}`}>{statusLabel(language, change.status).slice(0, 1)}</span>
+                    <code>{change.path}</code>
+                    <span>{transition.to.label}</span>
+                    <small>{lineDeltaLabel(change)}</small>
+                  </div>
+                )) : <p className="empty-result">{c.filterNothing}</p>}
               </div>
+            )}
 
-              {tab === 'timeline' && (
-                <div className="timeline">
-                  <div className="timeline-origin">
-                    <div className="timeline-marker origin"><span>00</span></div>
-                    <div><span className="micro-label">{c.sourceVersion} / {formatLocalizedDate(report.snapshots[0].capturedAt, language)}</span><h3>{report.snapshots[0].label}</h3><p>{Object.keys(report.snapshots[0].files).length} {c.filesWord} · {formatBytes(report.snapshots[0].totalBytes)}</p></div>
-                  </div>
-                  {report.transitions.map((transition) => <TimelineTransition key={transition.id} transition={transition} language={language} />)}
+            {view === 'export' && (
+              <div className="export-view">
+                <div className="export-toolbar">
+                  <button className="primary-action" type="button" onClick={() => downloadText('LOCAL_CHANGELOG.txt', detailedReport)}>{c.downloadAll}<span>↓</span></button>
+                  <button className="text-action" type="button" onClick={() => downloadText('git-time-machine-report.json', JSON.stringify(report, null, 2), 'application/json')}>{c.downloadJson}</button>
                 </div>
-              )}
-
-              {tab === 'files' && (
-                <div className="files-view">
-                  <div className="files-toolbar">
-                    <input placeholder={c.searchPlaceholder} value={query} onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} />
-                    <div>
-                      {(['all', 'added', 'modified', 'removed'] as StatusFilter[]).map((status) => (
-                        <button key={status} className={statusFilter === status ? 'active' : ''} type="button" onClick={() => setStatusFilter(status)}>{status === 'all' ? c.filterAll : statusLabel(language, status)}</button>
-                      ))}
-                    </div>
-                  </div>
-                  {filteredTransitions.length ? filteredTransitions.map((transition) => (
-                    <section className="file-group" key={transition.id}>
-                      <header><strong>{transition.from.label} → {transition.to.label}</strong><span>{fill(c.changesWord, { count: transition.changes.length })}</span></header>
-                      <div>{transition.changes.map((change) => <FileChangeRow key={`${transition.id}-${change.path}`} change={change} language={language} />)}</div>
-                    </section>
-                  )) : <div className="empty-line">{c.nothingFound}</div>}
-                </div>
-              )}
-
-              {tab === 'report' && (
-                <div className="report-view">
-                  <div className="report-toolbar"><div><strong>CHANGELOG.md</strong><span>{c.changelogDraft}</span></div><button className="line-action" type="button" onClick={copyChangelog}>{copied ? c.copied : c.copy}</button></div>
-                  <pre>{changelog}</pre>
-                </div>
-              )}
-            </div>
+                <pre>{detailedReport}</pre>
+              </div>
+            )}
           </section>
         )}
-
-        <section className="method-section">
-          <aside className="section-index"><span>03</span><small>{c.methodKicker}</small></aside>
-          <div className="section-content">
-            <header className="section-header"><div><h2>{c.methodTitle}</h2></div></header>
-            <div className="method-list">
-              <article><span>01</span><h3>{c.step1Title}</h3><p>{c.step1Text}</p></article>
-              <article><span>02</span><h3>{c.step2Title}</h3><p>{c.step2Text}</p></article>
-              <article><span>03</span><h3>{c.step3Title}</h3><p>{c.step3Text}</p></article>
-              <article><span>04</span><h3>{c.step4Title}</h3><p>{c.step4Text}</p></article>
-            </div>
-          </div>
-        </section>
       </main>
 
-      <footer className="poster-footer">
-        <div><strong>GIT TIME MACHINE</strong><span>OPEN SOURCE / MIT</span></div>
-        <p>{c.footerPrivacy}</p>
-        <span>BUILD 0.2.0 / 2026</span>
+      <footer>
+        <span>GIT TIME MACHINE / {c.buildLabel}</span>
+        <span>{c.privacy}</span>
       </footer>
     </div>
   )

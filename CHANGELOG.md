@@ -35,3 +35,12 @@
 - Responsive portfolio-grade interface
 - GitHub Pages deployment workflow
 - Core smoke test
+
+## 0.4.0 — Multi-format / liquid interface
+
+- Added ZIP, RAR, 7Z, TAR, GZ, BZ2 and XZ archive support through libarchive.js.
+- Added structured diagnostic errors with error codes, archive names, hints and technical details.
+- Replaced the poster interface with a minimal black liquid-glass design.
+- Added an animated pointer-reactive Liquid Eye.
+- Added detailed LOCAL commit dossiers with metadata, affected files and evidence-based verification notes.
+- Added editable domain, source and commit status metadata.
