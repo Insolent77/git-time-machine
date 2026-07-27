@@ -1,11 +1,5 @@
-import { useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
-import {
-  analyzeSnapshots,
-  buildChangelog,
-  buildMarkdownReport,
-  formatBytes,
-  formatDate,
-} from './lib/analyzer'
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
+import { analyzeSnapshots, formatBytes } from './lib/analyzer'
 import { copyText, downloadText } from './lib/download'
 import { makeDemoSnapshots } from './lib/demo'
 import type {
@@ -16,6 +10,20 @@ import type {
   VersionTransition,
 } from './lib/types'
 import { parseZipArchive, type ArchiveProgress } from './lib/zip'
+import {
+  COPY,
+  LANGUAGE_OPTIONS,
+  buildLocalizedChangelog,
+  buildLocalizedMarkdownReport,
+  categoryLabel,
+  commitDescription,
+  commitTitle,
+  fill,
+  formatLocalizedDate,
+  lineDeltaLabel,
+  statusLabel,
+  type Language,
+} from './i18n'
 
 type ArchiveItem = {
   id: string
@@ -25,29 +33,7 @@ type ArchiveItem = {
 }
 
 type Tab = 'timeline' | 'files' | 'report'
-
 type StatusFilter = 'all' | ChangeStatus
-
-const CATEGORY_LABELS: Record<ChangeCategory, string> = {
-  auth: 'Авторизация',
-  database: 'База данных',
-  admin: 'Админка',
-  api: 'API',
-  ui: 'Интерфейс',
-  styles: 'Стили',
-  tests: 'Тесты',
-  docs: 'Документация',
-  config: 'Конфигурация',
-  deps: 'Зависимости',
-  assets: 'Ресурсы',
-  other: 'Логика',
-}
-
-const STATUS_LABELS: Record<ChangeStatus, string> = {
-  added: 'Добавлен',
-  modified: 'Изменён',
-  removed: 'Удалён',
-}
 
 function inputDate(timestamp: number): string {
   const date = new Date(timestamp || Date.now())
@@ -73,89 +59,90 @@ function moveItem<T>(items: T[], from: number, to: number): T[] {
   return result
 }
 
-function fileDelta(change: FileChange): string {
-  if (change.binary) return `${formatBytes(change.sizeBefore)} → ${formatBytes(change.sizeAfter)}`
-  const parts = []
-  if (change.addedLines) parts.push(`+${change.addedLines}`)
-  if (change.removedLines) parts.push(`−${change.removedLines}`)
-  return parts.join(' / ') || 'без изменения строк'
+function getInitialLanguage(): Language {
+  const saved = window.localStorage.getItem('gtm-language')
+  return LANGUAGE_OPTIONS.some((option) => option.code === saved) ? saved as Language : 'en'
 }
 
-function MetricCard({ value, label, accent }: { value: string | number; label: string; accent?: string }) {
+function Metric({ value, label, index }: { value: string | number; label: string; index: string }) {
   return (
-    <article className="metric-card">
-      <span className={`metric-dot ${accent ?? ''}`} />
+    <article className="metric">
+      <span>{index}</span>
       <strong>{value}</strong>
-      <span>{label}</span>
+      <small>{label}</small>
     </article>
   )
 }
 
-function ChangeBadge({ status }: { status: ChangeStatus }) {
-  return <span className={`status-badge status-${status}`}>{STATUS_LABELS[status]}</span>
+function ChangeBadge({ status, language }: { status: ChangeStatus; language: Language }) {
+  return <span className={`status-label status-${status}`}>{statusLabel(language, status)}</span>
 }
 
-function CategoryBadge({ category }: { category: ChangeCategory }) {
-  return <span className={`category-badge category-${category}`}>{CATEGORY_LABELS[category]}</span>
+function CategoryBadge({ category, language }: { category: ChangeCategory; language: Language }) {
+  return <span className="category-label">{categoryLabel(language, category)}</span>
 }
 
-function FileChangeRow({ change }: { change: FileChange }) {
+function FileChangeRow({ change, language }: { change: FileChange; language: Language }) {
   return (
     <div className="file-change-row">
       <div className="file-main">
-        <ChangeBadge status={change.status} />
+        <ChangeBadge status={change.status} language={language} />
         <code title={change.path}>{change.path}</code>
       </div>
       <div className="file-meta">
-        <CategoryBadge category={change.category} />
-        <span>{fileDelta(change)}</span>
+        <CategoryBadge category={change.category} language={language} />
+        <span>{lineDeltaLabel(change, language, formatBytes)}</span>
       </div>
     </div>
   )
 }
 
-function TimelineTransition({ transition }: { transition: VersionTransition }) {
+function TimelineTransition({ transition, language }: { transition: VersionTransition; language: Language }) {
+  const c = COPY[language]
+
   return (
     <section className="timeline-transition">
-      <div className="timeline-rail" aria-hidden="true">
-        <span className="timeline-node" />
+      <div className="timeline-marker" aria-hidden="true">
+        <span>{formatLocalizedDate(transition.to.capturedAt, language).slice(0, 2)}</span>
       </div>
-      <div className="transition-content">
+      <div className="transition-body">
         <header className="transition-header">
           <div>
-            <span className="eyebrow">Версия {formatDate(transition.to.capturedAt)}</span>
+            <span className="micro-label">{c.version} / {formatLocalizedDate(transition.to.capturedAt, language)}</span>
             <h3>{transition.to.label}</h3>
-            <p>Из «{transition.from.label}» восстановлено {transition.commits.length} предполагаемых коммитов.</p>
+            <p>{fill(c.inferredFrom, { from: transition.from.label, count: transition.commits.length })}</p>
           </div>
-          <div className="transition-stats">
-            <span className="positive">+{transition.stats.filesAdded}</span>
-            <span className="neutral">~{transition.stats.filesModified}</span>
-            <span className="negative">−{transition.stats.filesRemoved}</span>
+          <div className="transition-stats" aria-label="File changes">
+            <span>+{transition.stats.filesAdded}</span>
+            <span>~{transition.stats.filesModified}</span>
+            <span>−{transition.stats.filesRemoved}</span>
           </div>
         </header>
 
         {transition.commits.length === 0 ? (
-          <div className="empty-inline">Изменения между архивами не обнаружены.</div>
+          <p className="empty-line">{c.noChanges}</p>
         ) : (
           <div className="commit-list">
             {transition.commits.map((commit, index) => (
-              <details className="commit-card" key={commit.id} open={index === 0}>
+              <details className="commit-row" key={commit.id} open={index === 0}>
                 <summary>
-                  <div className="commit-index">{String(index + 1).padStart(2, '0')}</div>
-                  <div className="commit-summary">
-                    <div className="commit-title-line">
-                      <h4>{commit.title}</h4>
-                      <CategoryBadge category={commit.category} />
+                  <span className="commit-number">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="commit-copy">
+                    <div>
+                      <h4>{commitTitle(language, commit.category)}</h4>
+                      <CategoryBadge category={commit.category} language={language} />
                     </div>
-                    <p>{commit.description}</p>
+                    <p>{commitDescription(language, commit)}</p>
                   </div>
-                  <div className="confidence" title="Оценка основана на совпадении путей файлов с известными категориями">
-                    <strong>{commit.confidence}%</strong>
-                    <span>уверенность</span>
+                  <div className="confidence" title={c.confidenceHint}>
+                    <strong>{commit.confidence}</strong>
+                    <span>% {c.confidence}</span>
                   </div>
                 </summary>
                 <div className="commit-files">
-                  {commit.changes.map((change) => <FileChangeRow key={`${commit.id}-${change.path}`} change={change} />)}
+                  {commit.changes.map((change) => (
+                    <FileChangeRow key={`${commit.id}-${change.path}`} change={change} language={language} />
+                  ))}
                 </div>
               </details>
             ))}
@@ -166,7 +153,46 @@ function TimelineTransition({ transition }: { transition: VersionTransition }) {
   )
 }
 
+function ArchiveSculpture({ language }: { language: Language }) {
+  const c = COPY[language]
+  return (
+    <div className="archive-sculpture" aria-label={c.diagramLabel}>
+      <svg className="connector-map" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M110 160 L500 310 L858 92" />
+        <path d="M206 510 L500 340 L890 410" />
+        <path d="M500 80 L500 610" />
+        <path d="M500 330 L770 590" />
+      </svg>
+
+      <div className="map-node node-a"><i />V.01</div>
+      <div className="map-node node-b"><i />SHA.256</div>
+      <div className="map-node node-c"><i />Δ.033</div>
+      <div className="map-node node-d"><i />MD.OUT</div>
+
+      <div className="signal-cloud" aria-hidden="true">
+        {Array.from({ length: 19 }, (_, index) => <span key={index} />)}
+      </div>
+      <div className="beam beam-a"><span>ARCHIVE / 01</span></div>
+      <div className="beam beam-b"><span>ARCHIVE / 02</span></div>
+      <div className="beam beam-c"><span>ARCHIVE / 03</span></div>
+      <div className="core-node"><span>GTM</span><small>REBUILD</small></div>
+
+      <div className="diagram-caption">
+        <span>{c.diagramLabel}</span>
+        <strong>NO. 02</strong>
+      </div>
+      <div className="diagram-legend">
+        <span><b>01</b>{c.diagramVersion}</span>
+        <span><b>02</b>{c.diagramFiles}</span>
+        <span><b>03</b>{c.diagramCommits}</span>
+        <span><b>04</b>{c.diagramConfidence}</span>
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [archives, setArchives] = useState<ArchiveItem[]>([])
   const [report, setReport] = useState<AnalysisReport | null>(null)
   const [tab, setTab] = useState<Tab>('timeline')
@@ -177,14 +203,25 @@ function App() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [copied, setCopied] = useState(false)
+  const c = COPY[language]
 
-  const changelog = useMemo(() => report ? buildChangelog(report) : '', [report])
-  const markdownReport = useMemo(() => report ? buildMarkdownReport(report) : '', [report])
+  useEffect(() => {
+    document.documentElement.lang = language
+    window.localStorage.setItem('gtm-language', language)
+  }, [language])
+
+  const changelog = useMemo(
+    () => report ? buildLocalizedChangelog(report, language) : '',
+    [report, language],
+  )
+  const markdownReport = useMemo(
+    () => report ? buildLocalizedMarkdownReport(report, language, formatBytes) : '',
+    [report, language],
+  )
 
   const filteredTransitions = useMemo(() => {
     if (!report) return []
     const normalizedQuery = query.trim().toLowerCase()
-
     return report.transitions
       .map((transition) => ({
         ...transition,
@@ -197,16 +234,21 @@ function App() {
       .filter((transition) => transition.changes.length > 0)
   }, [report, query, statusFilter])
 
+  function changeLanguage(nextLanguage: Language) {
+    setLanguage(nextLanguage)
+    setError(null)
+  }
+
   function addFiles(fileList: FileList | File[]) {
     const incoming = Array.from(fileList)
     const zipFiles = incoming.filter((file) => file.name.toLowerCase().endsWith('.zip'))
 
     if (!zipFiles.length) {
-      setError('Выберите обычные ZIP-архивы. RAR и 7z появятся в следующих версиях.')
+      setError(c.zipOnlyError)
       return
     }
 
-    setError(incoming.length === zipFiles.length ? null : 'Некоторые файлы пропущены: сейчас поддерживается только ZIP.')
+    setError(incoming.length === zipFiles.length ? null : c.someSkippedError)
     setReport(null)
     setArchives((current) => [
       ...current,
@@ -227,7 +269,7 @@ function App() {
 
   async function runAnalysis() {
     if (archives.length < 2) {
-      setError('Добавьте минимум две версии проекта, чтобы построить историю изменений.')
+      setError(c.minimumError)
       return
     }
 
@@ -247,8 +289,8 @@ function App() {
       setReport(analyzeSnapshots(snapshots))
       setTab('timeline')
       requestAnimationFrame(() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' }))
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось проанализировать архивы.')
+    } catch {
+      setError(c.analysisError)
     } finally {
       setBusy(false)
       setProgress(null)
@@ -269,7 +311,7 @@ function App() {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1600)
     } catch {
-      setError('Браузер не разрешил копирование. Скачайте CHANGELOG.md кнопкой рядом.')
+      setError(c.copyError)
     }
   }
 
@@ -284,265 +326,218 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" aria-label="Git Time Machine — наверх">
-          <span className="brand-mark">GTM</span>
-          <span>
-            <strong>Git Time Machine</strong>
-            <small>reconstruct development history</small>
-          </span>
+      <header className="poster-header">
+        <a className="poster-brand" href="#top" aria-label="Git Time Machine">
+          <span>GTM</span>
+          <div><strong>Git Time Machine</strong><small>{c.brandSubtitle}</small></div>
         </a>
-        <div className="topbar-actions">
-          <span className="privacy-pill"><span />100% в браузере</span>
-          <a className="ghost-button" href="https://github.com/" target="_blank" rel="noreferrer">GitHub ↗</a>
-        </div>
+        <div className="header-code">{c.projectCode}<br /><span>CLIENT-SIDE / OPEN SOURCE</span></div>
+        <nav className="language-switch" aria-label="Language">
+          {LANGUAGE_OPTIONS.map((option) => (
+            <button
+              key={option.code}
+              className={language === option.code ? 'active' : ''}
+              type="button"
+              title={option.name}
+              aria-pressed={language === option.code}
+              onClick={() => changeLanguage(option.code)}
+            >
+              {option.short}
+            </button>
+          ))}
+        </nav>
+        <a className="source-link" href="https://github.com/Insolent77/git-time-machine" target="_blank" rel="noreferrer">{c.sourceCode}</a>
       </header>
 
       <main id="top">
-        <section className="hero">
-          <div className="hero-copy">
-            <span className="hero-kicker">01 — Code archaeology</span>
-            <h1>История кода.<br /><em>Восстановлена.</em></h1>
-            <p>
-              Загрузите старые ZIP-версии. Git Time Machine сравнит файлы, восстановит вероятные этапы разработки
-              и подготовит понятный CHANGELOG — без отправки исходников на сервер.
-            </p>
-            <div className="hero-actions">
-              <a className="primary-button" href="#workspace">Загрузить версии</a>
-              <button className="secondary-button" type="button" onClick={runDemo}>Открыть демо</button>
-            </div>
-            <div className="hero-proof">
-              <span><strong>ZIP</strong> обработка</span>
-              <span><strong>SHA-256</strong> сравнение</span>
-              <span><strong>Markdown</strong> экспорт</span>
+        <section className="poster-hero">
+          <div className="hero-heading">
+            <span className="hero-hash">#</span>
+            <div>
+              <p>{c.heroKicker}</p>
+              <h1>{c.heroTitleA}<br /><em>{c.heroTitleB}</em></h1>
             </div>
           </div>
 
-          <div className="hero-visual" aria-label="Пример восстановленной истории">
-            <div className="visual-window">
-              <div className="window-bar"><span /><span /><span /><small>timeline.reconstructed</small></div>
-              <div className="visual-code">
-                <div className="code-line dim"><b>01</b><span>prototype.zip</span><i>3 files</i></div>
-                <div className="visual-connector" />
-                <div className="code-line"><b>02</b><span>student-cabinet.zip</span><i className="plus">+5</i></div>
-                <div className="visual-commit"><span>feat</span> Добавлен личный кабинет</div>
-                <div className="visual-commit"><span>style</span> Адаптирован интерфейс</div>
-                <div className="visual-connector" />
-                <div className="code-line"><b>03</b><span>contracts-admin.zip</span><i className="plus">+8</i></div>
-                <div className="visual-commit active"><span>feat</span> Электронные договоры</div>
-                <div className="visual-commit"><span>test</span> Проверка создания договора</div>
-              </div>
+          <div className="hero-description">
+            <span>{c.browserOnly}</span>
+            <p>{c.heroText}</p>
+            <div className="hero-actions">
+              <a className="solid-action" href="#workspace">{c.uploadVersions}</a>
+              <button className="line-action" type="button" onClick={runDemo}>{c.openDemo}</button>
             </div>
-            <div className="floating-card floating-one"><strong>12</strong><span>commits inferred</span></div>
-            <div className="floating-card floating-two"><strong>92%</strong><span>top confidence</span></div>
+          </div>
+
+          <div className="hero-features">
+            <span><b>01</b>{c.zipProcessing}</span>
+            <span><b>02</b>{c.hashCompare}</span>
+            <span><b>03</b>{c.markdownExport}</span>
+          </div>
+
+          <ArchiveSculpture language={language} />
+          <p className="vertical-claim">{c.verticalClaim}</p>
+
+          <div className="protocol-strip">
+            <div><small>{c.inputLabel}</small><strong>02+</strong><span>// {c.archivesUnit}</span></div>
+            <div><small>{c.outputLabel}</small><strong>01</strong><span>// {c.historyUnit}</span></div>
           </div>
         </section>
 
         <section className="workspace" id="workspace">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Шаг 1</span>
-              <h2>Добавьте версии проекта</h2>
-              <p>Лучше использовать архивы из разных дат. Папки зависимостей и сборки будут исключены автоматически.</p>
+          <aside className="section-index">
+            <span>01</span>
+            <small>{c.workspaceKicker}</small>
+          </aside>
+          <div className="section-content">
+            <header className="section-header">
+              <div><h2>{c.workspaceTitle}</h2><p>{c.workspaceText}</p></div>
+              {archives.length > 0 && <button className="plain-link danger" type="button" onClick={reset}>{c.clearAll}</button>}
+            </header>
+
+            <div
+              className={`dropzone ${dragging ? 'is-dragging' : ''}`}
+              onDragEnter={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(true) }}
+              onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
+            >
+              <div className="drop-symbol">[ + ]</div>
+              <div><h3>{c.dropTitle}</h3><p>{c.dropText}</p></div>
+              <label className="outline-action">
+                {c.chooseArchives}
+                <input type="file" accept=".zip,application/zip" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => event.target.files && addFiles(event.target.files)} />
+              </label>
+              <small>{c.uploadLimit}</small>
             </div>
-            {archives.length > 0 && <button className="text-button danger-text" type="button" onClick={reset}>Очистить всё</button>}
-          </div>
 
-          <div
-            className={`dropzone ${dragging ? 'is-dragging' : ''}`}
-            onDragEnter={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(true) }}
-            onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()}
-            onDragLeave={() => setDragging(false)}
-            onDrop={onDrop}
-          >
-            <div className="drop-icon">⇩</div>
-            <h3>Перетащите ZIP-архивы сюда</h3>
-            <p>или выберите несколько файлов на компьютере</p>
-            <label className="file-button">
-              Выбрать архивы
-              <input type="file" accept=".zip,application/zip" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => event.target.files && addFiles(event.target.files)} />
-            </label>
-            <small>До 200 МБ на архив · файлы не загружаются в интернет</small>
-          </div>
+            {error && <div className="error-line"><strong>{c.errorPrefix}</strong> {error}</div>}
 
-          {error && <div className="error-banner"><strong>Проверьте данные:</strong> {error}</div>}
-
-          {archives.length > 0 && (
-            <div className="archive-panel">
-              <div className="archive-panel-head">
-                <div>
-                  <strong>Выбрано версий: {archives.length}</strong>
-                  <span>Дата определяет порядок истории. Название станет заголовком версии.</span>
+            {archives.length > 0 && (
+              <div className="archive-editor">
+                <div className="archive-editor-head">
+                  <div><strong>{fill(c.selectedVersions, { count: archives.length })}</strong><span>{c.orderHint}</span></div>
+                  <button className="plain-link" type="button" onClick={() => setArchives((items) => [...items].sort((left, right) => left.date.localeCompare(right.date)))}>{c.sortByDate}</button>
                 </div>
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => setArchives((items) => [...items].sort((left, right) => left.date.localeCompare(right.date)))}
-                >
-                  Сортировать по дате
-                </button>
-              </div>
 
-              <div className="archive-list">
-                {archives.map((archive, index) => (
-                  <div className="archive-row" key={archive.id}>
-                    <div className="archive-order">
-                      <span>{String(index + 1).padStart(2, '0')}</span>
-                      <div>
-                        <button type="button" disabled={index === 0} onClick={() => setArchives((items) => moveItem(items, index, index - 1))}>↑</button>
-                        <button type="button" disabled={index === archives.length - 1} onClick={() => setArchives((items) => moveItem(items, index, index + 1))}>↓</button>
+                <div className="archive-list">
+                  {archives.map((archive, index) => (
+                    <div className="archive-row" key={archive.id}>
+                      <div className="archive-order">
+                        <strong>{String(index + 1).padStart(2, '0')}</strong>
+                        <div>
+                          <button type="button" disabled={index === 0} onClick={() => setArchives((items) => moveItem(items, index, index - 1))}>↑</button>
+                          <button type="button" disabled={index === archives.length - 1} onClick={() => setArchives((items) => moveItem(items, index, index + 1))}>↓</button>
+                        </div>
                       </div>
+                      <div className="archive-file"><span>ZIP</span><div><strong>{archive.file.name}</strong><small>{formatBytes(archive.file.size)}</small></div></div>
+                      <label><span>{c.versionName}</span><input value={archive.label} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, label: event.target.value } : item))} /></label>
+                      <label><span>{c.versionDate}</span><input type="date" value={archive.date} onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, date: event.target.value } : item))} /></label>
+                      <button className="remove-archive" type="button" aria-label={fill(c.removeArchive, { name: archive.file.name })} onClick={() => setArchives((items) => items.filter((item) => item.id !== archive.id))}>×</button>
                     </div>
-                    <div className="archive-file">
-                      <span className="zip-icon">ZIP</span>
-                      <div>
-                        <strong>{archive.file.name}</strong>
-                        <small>{formatBytes(archive.file.size)}</small>
-                      </div>
-                    </div>
-                    <label>
-                      <span>Название версии</span>
-                      <input
-                        value={archive.label}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, label: event.target.value } : item))}
-                      />
-                    </label>
-                    <label>
-                      <span>Дата версии</span>
-                      <input
-                        type="date"
-                        value={archive.date}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) => setArchives((items) => items.map((item) => item.id === archive.id ? { ...item, date: event.target.value } : item))}
-                      />
-                    </label>
-                    <button className="remove-button" type="button" aria-label={`Удалить ${archive.file.name}`} onClick={() => setArchives((items) => items.filter((item) => item.id !== archive.id))}>×</button>
-                  </div>
-                ))}
-              </div>
-
-              <div className="analysis-action">
-                <div>
-                  <strong>{archives.length >= 2 ? 'Всё готово к сравнению' : 'Нужна ещё одна версия'}</strong>
-                  <span>{archives.length >= 2 ? 'Анализ выполняется локально и может занять время на больших архивах.' : 'Минимум два архива позволяют определить, что изменилось.'}</span>
+                  ))}
                 </div>
-                <button className="primary-button" type="button" disabled={busy || archives.length < 2} onClick={runAnalysis}>
-                  {busy ? 'Анализируем…' : 'Восстановить историю'}
-                </button>
-              </div>
 
-              {busy && progress && (
-                <div className="progress-block">
-                  <div className="progress-copy">
-                    <strong>{progress.archive}</strong>
-                    <span>{progress.currentPath ?? 'Завершаем обработку'}</span>
-                  </div>
-                  <div className="progress-track"><span style={{ width: `${progress.total ? Math.round(progress.processed / progress.total * 100) : 0}%` }} /></div>
-                  <small>{progress.processed} / {progress.total}</small>
+                <div className="analysis-bar">
+                  <div><strong>{archives.length >= 2 ? c.readyTitle : c.needAnotherTitle}</strong><span>{archives.length >= 2 ? c.readyText : c.needAnotherText}</span></div>
+                  <button className="solid-action" type="button" disabled={busy || archives.length < 2} onClick={runAnalysis}>{busy ? c.analyzing : c.reconstruct}</button>
                 </div>
-              )}
-            </div>
-          )}
+
+                {busy && progress && (
+                  <div className="progress-line">
+                    <div><strong>{progress.archive}</strong><span>{progress.currentPath ?? c.finishing}</span></div>
+                    <div className="progress-track"><span style={{ width: `${progress.total ? Math.round(progress.processed / progress.total * 100) : 0}%` }} /></div>
+                    <small>{progress.processed} / {progress.total}</small>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </section>
 
         {report && (
           <section className="results" id="results">
-            <div className="section-heading results-heading">
-              <div>
-                <span className="eyebrow">Результат анализа</span>
-                <h2>Предполагаемая история разработки</h2>
-                <p>Это реконструкция, а не доказанная Git-история. Проверьте формулировки перед публикацией.</p>
-              </div>
-              <div className="export-actions">
-                <button type="button" className="secondary-button" onClick={() => downloadText('git-time-machine-report.json', JSON.stringify(report, null, 2), 'application/json')}>JSON</button>
-                <button type="button" className="secondary-button" onClick={() => downloadText('ANALYSIS.md', markdownReport, 'text/markdown;charset=utf-8')}>Отчёт</button>
-                <button type="button" className="primary-button" onClick={() => downloadText('CHANGELOG.md', changelog, 'text/markdown;charset=utf-8')}>Скачать CHANGELOG</button>
-              </div>
-            </div>
-
-            <div className="metrics-grid">
-              <MetricCard value={report.snapshots.length} label="версий проекта" accent="purple" />
-              <MetricCard value={report.totals.inferredCommits} label="предполагаемых коммитов" accent="cyan" />
-              <MetricCard value={`+${report.totals.linesAdded}`} label="добавлено строк" accent="green" />
-              <MetricCard value={`−${report.totals.linesRemoved}`} label="удалено строк" accent="red" />
-              <MetricCard value={report.totals.analyzedFiles} label="файлов обработано" accent="amber" />
-            </div>
-
-            <div className="result-tabs" role="tablist">
-              <button className={tab === 'timeline' ? 'active' : ''} type="button" onClick={() => setTab('timeline')}>Хронология</button>
-              <button className={tab === 'files' ? 'active' : ''} type="button" onClick={() => setTab('files')}>Все изменения</button>
-              <button className={tab === 'report' ? 'active' : ''} type="button" onClick={() => setTab('report')}>CHANGELOG</button>
-            </div>
-
-            {tab === 'timeline' && (
-              <div className="timeline">
-                <div className="timeline-origin">
-                  <span className="timeline-node origin" />
-                  <div>
-                    <span className="eyebrow">Исходная версия · {formatDate(report.snapshots[0].capturedAt)}</span>
-                    <h3>{report.snapshots[0].label}</h3>
-                    <p>{Object.keys(report.snapshots[0].files).length} файлов · {formatBytes(report.snapshots[0].totalBytes)}</p>
-                  </div>
+            <aside className="section-index"><span>02</span><small>{c.resultKicker}</small></aside>
+            <div className="section-content">
+              <header className="section-header result-header">
+                <div><h2>{c.resultTitle}</h2><p>{c.resultText}</p></div>
+                <div className="export-actions">
+                  <button className="line-action" type="button" onClick={() => downloadText('git-time-machine-report.json', JSON.stringify(report, null, 2), 'application/json')}>JSON</button>
+                  <button className="line-action" type="button" onClick={() => downloadText('ANALYSIS.md', markdownReport, 'text/markdown;charset=utf-8')}>{c.exportReport}</button>
+                  <button className="solid-action" type="button" onClick={() => downloadText('CHANGELOG.md', changelog, 'text/markdown;charset=utf-8')}>{c.downloadChangelog}</button>
                 </div>
-                {report.transitions.map((transition) => <TimelineTransition key={transition.id} transition={transition} />)}
-              </div>
-            )}
+              </header>
 
-            {tab === 'files' && (
-              <div className="files-view">
-                <div className="files-toolbar">
-                  <input placeholder="Поиск по пути файла…" value={query} onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} />
-                  <div className="filter-buttons">
-                    {(['all', 'added', 'modified', 'removed'] as StatusFilter[]).map((status) => (
-                      <button key={status} className={statusFilter === status ? 'active' : ''} type="button" onClick={() => setStatusFilter(status)}>
-                        {status === 'all' ? 'Все' : STATUS_LABELS[status]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {filteredTransitions.length ? filteredTransitions.map((transition) => (
-                  <section className="file-group" key={transition.id}>
-                    <header><strong>{transition.from.label} → {transition.to.label}</strong><span>{transition.changes.length} изменений</span></header>
-                    <div>{transition.changes.map((change) => <FileChangeRow key={`${transition.id}-${change.path}`} change={change} />)}</div>
-                  </section>
-                )) : <div className="empty-state">По выбранному фильтру ничего не найдено.</div>}
+              <div className="metrics">
+                <Metric index="01" value={report.snapshots.length} label={c.metricVersions} />
+                <Metric index="02" value={report.totals.inferredCommits} label={c.metricCommits} />
+                <Metric index="03" value={`+${report.totals.linesAdded}`} label={c.metricAdded} />
+                <Metric index="04" value={`−${report.totals.linesRemoved}`} label={c.metricRemoved} />
+                <Metric index="05" value={report.totals.analyzedFiles} label={c.metricFiles} />
               </div>
-            )}
 
-            {tab === 'report' && (
-              <div className="report-view">
-                <div className="report-toolbar">
-                  <div>
-                    <strong>CHANGELOG.md</strong>
-                    <span>Готовый черновик для репозитория</span>
-                  </div>
-                  <button className="secondary-button" type="button" onClick={copyChangelog}>{copied ? 'Скопировано ✓' : 'Копировать'}</button>
-                </div>
-                <pre>{changelog}</pre>
+              <div className="result-nav" role="tablist">
+                <button className={tab === 'timeline' ? 'active' : ''} type="button" onClick={() => setTab('timeline')}>01 / {c.tabTimeline}</button>
+                <button className={tab === 'files' ? 'active' : ''} type="button" onClick={() => setTab('files')}>02 / {c.tabFiles}</button>
+                <button className={tab === 'report' ? 'active' : ''} type="button" onClick={() => setTab('report')}>03 / {c.tabChangelog}</button>
               </div>
-            )}
+
+              {tab === 'timeline' && (
+                <div className="timeline">
+                  <div className="timeline-origin">
+                    <div className="timeline-marker origin"><span>00</span></div>
+                    <div><span className="micro-label">{c.sourceVersion} / {formatLocalizedDate(report.snapshots[0].capturedAt, language)}</span><h3>{report.snapshots[0].label}</h3><p>{Object.keys(report.snapshots[0].files).length} {c.filesWord} · {formatBytes(report.snapshots[0].totalBytes)}</p></div>
+                  </div>
+                  {report.transitions.map((transition) => <TimelineTransition key={transition.id} transition={transition} language={language} />)}
+                </div>
+              )}
+
+              {tab === 'files' && (
+                <div className="files-view">
+                  <div className="files-toolbar">
+                    <input placeholder={c.searchPlaceholder} value={query} onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} />
+                    <div>
+                      {(['all', 'added', 'modified', 'removed'] as StatusFilter[]).map((status) => (
+                        <button key={status} className={statusFilter === status ? 'active' : ''} type="button" onClick={() => setStatusFilter(status)}>{status === 'all' ? c.filterAll : statusLabel(language, status)}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {filteredTransitions.length ? filteredTransitions.map((transition) => (
+                    <section className="file-group" key={transition.id}>
+                      <header><strong>{transition.from.label} → {transition.to.label}</strong><span>{fill(c.changesWord, { count: transition.changes.length })}</span></header>
+                      <div>{transition.changes.map((change) => <FileChangeRow key={`${transition.id}-${change.path}`} change={change} language={language} />)}</div>
+                    </section>
+                  )) : <div className="empty-line">{c.nothingFound}</div>}
+                </div>
+              )}
+
+              {tab === 'report' && (
+                <div className="report-view">
+                  <div className="report-toolbar"><div><strong>CHANGELOG.md</strong><span>{c.changelogDraft}</span></div><button className="line-action" type="button" onClick={copyChangelog}>{copied ? c.copied : c.copy}</button></div>
+                  <pre>{changelog}</pre>
+                </div>
+              )}
+            </div>
           </section>
         )}
 
-        <section className="how-it-works">
-          <div className="section-heading centered">
-            <div>
-              <span className="eyebrow">Метод</span>
-              <h2>Четыре шага. Никакой магии.</h2>
+        <section className="method-section">
+          <aside className="section-index"><span>03</span><small>{c.methodKicker}</small></aside>
+          <div className="section-content">
+            <header className="section-header"><div><h2>{c.methodTitle}</h2></div></header>
+            <div className="method-list">
+              <article><span>01</span><h3>{c.step1Title}</h3><p>{c.step1Text}</p></article>
+              <article><span>02</span><h3>{c.step2Title}</h3><p>{c.step2Text}</p></article>
+              <article><span>03</span><h3>{c.step3Title}</h3><p>{c.step3Text}</p></article>
+              <article><span>04</span><h3>{c.step4Title}</h3><p>{c.step4Text}</p></article>
             </div>
-          </div>
-          <div className="steps-grid">
-            <article><span>01</span><h3>Читаем архивы</h3><p>JSZip распаковывает версии локально. Служебные каталоги и тяжёлые сборочные файлы исключаются.</p></article>
-            <article><span>02</span><h3>Сравниваем снимки</h3><p>SHA-256 определяет изменённые файлы, а анализ текста оценивает добавленные и удалённые строки.</p></article>
-            <article><span>03</span><h3>Восстанавливаем этапы</h3><p>Изменения группируются по авторизации, БД, API, интерфейсу, тестам и другим областям проекта.</p></article>
-            <article><span>04</span><h3>Экспортируем результат</h3><p>Скачайте CHANGELOG, полный Markdown-отчёт или JSON для дальнейшей автоматизации.</p></article>
           </div>
         </section>
       </main>
 
-      <footer>
-        <div className="brand compact"><span className="brand-mark">GTM</span><span><strong>Git Time Machine</strong><small>open-source portfolio project</small></span></div>
-        <p>Исходные файлы обрабатываются только в вашем браузере.</p>
-        <span>MIT License · MVP 0.1.0</span>
+      <footer className="poster-footer">
+        <div><strong>GIT TIME MACHINE</strong><span>OPEN SOURCE / MIT</span></div>
+        <p>{c.footerPrivacy}</p>
+        <span>BUILD 0.2.0 / 2026</span>
       </footer>
     </div>
   )

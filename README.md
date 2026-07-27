@@ -33,6 +33,9 @@ Git Time Machine turns that archive pile into a structured, transparent reconstr
 - Timeline, searchable file view, and Markdown preview
 - Export to `CHANGELOG.md`, full Markdown report, and JSON
 - Built-in demo mode
+- Five interface languages: English, Russian, Chinese, German, and Spanish
+- English default with locally remembered language preference
+- Experimental technical-poster interface inspired by editorial archive graphics
 - Automatic GitHub Pages deployment
 
 ## Tech stack
@@ -126,7 +129,8 @@ src/
     types.ts      # domain model
     zip.ts        # secure browser-side ZIP processing
   App.tsx         # product UI
-  styles.css      # responsive visual system
+  i18n.ts          # five-language interface and localized exports
+  styles.css      # responsive technical-poster visual system
 ```
 
 ## Safety notes
