@@ -50,6 +50,13 @@ type RawArchiveEntry = {
   modifiedAt?: string
 }
 
+type LibarchiveProgressEntry = {
+  path?: string
+  file: {
+    name?: string
+  }
+}
+
 let libarchiveInitialized = false
 
 function ensureLibarchive(): void {
@@ -197,7 +204,9 @@ async function readZipEntries(file: File, onProgress?: (progress: ArchiveProgres
 
     try {
       const bytes = await entry.async('uint8array')
-      output.push({ path, blob: new Blob([bytes]), modifiedAt: entry.date?.toISOString() })
+      const blobBuffer = new ArrayBuffer(bytes.byteLength)
+      new Uint8Array(blobBuffer).set(bytes)
+      output.push({ path, blob: new Blob([blobBuffer]), modifiedAt: entry.date?.toISOString() })
     } catch (error) {
       throw new ArchiveAnalysisError({
         code: 'ENTRY_READ_FAILED',
@@ -227,7 +236,7 @@ async function readMultiFormatEntries(file: File, onProgress?: (progress: Archiv
       })
     }
 
-    const extracted = await archive.extractFiles((entry) => {
+    const extracted = await archive.extractFiles((entry: LibarchiveProgressEntry) => {
       onProgress?.({
         archive: file.name,
         processed: 0,
