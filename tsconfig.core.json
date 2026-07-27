@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-core"
+  },
+  "include": ["src/lib/types.ts", "src/lib/analyzer.ts", "src/lib/demo.ts"]
+}
