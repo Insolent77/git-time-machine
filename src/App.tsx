@@ -301,15 +301,15 @@ function App() {
       <main id="top">
         <section className="hero">
           <div className="hero-copy">
-            <span className="hero-kicker">Археология кода без Git-истории</span>
-            <h1>Верните прошлое<br /><em>вашему проекту.</em></h1>
+            <span className="hero-kicker">01 — Code archaeology</span>
+            <h1>История кода.<br /><em>Восстановлена.</em></h1>
             <p>
               Загрузите старые ZIP-версии. Git Time Machine сравнит файлы, восстановит вероятные этапы разработки
               и подготовит понятный CHANGELOG — без отправки исходников на сервер.
             </p>
             <div className="hero-actions">
-              <a className="primary-button" href="#workspace">Начать восстановление</a>
-              <button className="secondary-button" type="button" onClick={runDemo}>Посмотреть демо</button>
+              <a className="primary-button" href="#workspace">Загрузить версии</a>
+              <button className="secondary-button" type="button" onClick={runDemo}>Открыть демо</button>
             </div>
             <div className="hero-proof">
               <span><strong>ZIP</strong> обработка</span>
@@ -526,8 +526,8 @@ function App() {
         <section className="how-it-works">
           <div className="section-heading centered">
             <div>
-              <span className="eyebrow">Как это работает</span>
-              <h2>От архивов к понятной истории</h2>
+              <span className="eyebrow">Метод</span>
+              <h2>Четыре шага. Никакой магии.</h2>
             </div>
           </div>
           <div className="steps-grid">

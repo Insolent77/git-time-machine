@@ -16,3 +16,12 @@
 - Responsive portfolio-grade interface
 - GitHub Pages deployment workflow
 - Core smoke test
+
+## 0.2.0 — Swiss interface
+
+- Reworked the interface in Swiss/International Typographic Style.
+- Replaced gradients, shadows and rounded cards with a strict grid and rules.
+- Added a monochrome palette with a single red accent.
+- Flattened result metrics, timeline entries and archive controls.
+- Improved responsive layouts for tablets and phones.
+- Added Vite client type declarations for CSS imports.
