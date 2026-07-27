@@ -5,7 +5,12 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
-    "outDir": ".tmp-core"
+    "outDir": ".tmp-core",
+    "rootDir": "src/lib"
   },
-  "include": ["src/lib/types.ts", "src/lib/analyzer.ts", "src/lib/demo.ts"]
+  "include": [
+    "src/lib/types.ts",
+    "src/lib/analyzer.ts",
+    "src/lib/demo.ts"
+  ]
 }
