@@ -320,7 +320,7 @@ footer {
 }
 .metadata-settings summary::-webkit-details-marker { display: none; }
 .metadata-settings[open] summary { color: var(--ink); }
-.metadata-settings > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; padding: 0 0 28px; }
+.metadata-settings > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 22px; padding: 0 0 28px; }
 .metadata-settings select option { color: #111; }
 
 .analysis-command {
@@ -356,6 +356,17 @@ footer {
 }
 .view-switch button.active,
 .view-switch button:hover { color: #050505; background: var(--ink); }
+
+.scope-notice {
+  display: grid;
+  grid-template-columns: minmax(180px, .35fr) 1fr;
+  gap: 28px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.scope-notice strong { color: var(--accent); font-weight: 400; }
+.scope-notice p { margin: 0; max-width: 920px; line-height: 1.55; }
 
 .commit-entry { border-bottom: 1px solid var(--line); }
 .commit-entry summary {
@@ -484,6 +495,7 @@ footer {
   .file-row { grid-template-columns: 28px minmax(0, 1fr) 76px; }
   .file-row > span:not(.file-status) { display: none; }
   .view-switch button { flex: 1; padding-inline: 8px; }
+  .scope-notice { grid-template-columns: 1fr; gap: 8px; }
   footer { align-items: flex-start; flex-direction: column; justify-content: center; gap: 8px; }
 }
 
