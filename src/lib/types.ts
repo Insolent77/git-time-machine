@@ -4,6 +4,9 @@ export type ComparisonMode = 'auto' | 'full' | 'patch'
 export type ResolvedComparisonMode = 'full' | 'patch'
 export type HistoryConfidence = 'low' | 'medium' | 'high'
 export type CapturePrecision = 'date' | 'datetime'
+export type SnapshotKind = 'source' | 'browser_export' | 'binary_package' | 'mixed'
+export type FileAnalysisRole = 'source' | 'artifact' | 'third_party' | 'generated'
+export type ArchiveRelationship = 'related' | 'unconfirmed'
 
 export type ChangeCategory =
   | 'auth'
@@ -102,6 +105,8 @@ export type SemanticFactCode =
   | 'access_rule'
   | 'code_logic'
   | 'file_content'
+  | 'browser_snapshot'
+  | 'external_dependency_bundle'
 
 export interface SemanticEvidence {
   path: string
@@ -142,6 +147,18 @@ export interface SnapshotFile {
   kind: FileKind
   content?: string
   modifiedAt?: string
+  analysisRole?: FileAnalysisRole
+}
+
+export interface SnapshotProfile {
+  kind: SnapshotKind
+  identityTokens: string[]
+  sourceFiles: number
+  artifactFiles: number
+  thirdPartyFiles: number
+  generatedFiles: number
+  binaryFiles: number
+  warnings: string[]
 }
 
 export interface Snapshot {
@@ -153,6 +170,7 @@ export interface Snapshot {
   files: Record<string, SnapshotFile>
   totalBytes: number
   ignoredCount: number
+  profile?: SnapshotProfile
 }
 
 export interface FileChange {
@@ -189,7 +207,13 @@ export interface ScopeAnalysis {
   ignoredPotentialRemovals: number
   historyConfidence: HistoryConfidence
   historyConfidencePercent: number
-  reason: 'manual_full' | 'manual_patch' | 'no_common_paths' | 'low_overlap' | 'partial_snapshot' | 'sufficient_overlap'
+  reason: 'manual_full' | 'manual_patch' | 'no_common_paths' | 'low_overlap' | 'partial_snapshot' | 'sufficient_overlap' | 'relationship_unconfirmed'
+  relationship: ArchiveRelationship
+  comparisonAllowed: boolean
+  relationshipConfidencePercent: number
+  sharedIdentityTokens: string[]
+  sharedContentHashCount: number
+  relationshipReason: 'common_paths' | 'shared_identity' | 'shared_content' | 'manual_override' | 'no_project_evidence'
 }
 
 export interface InferredCommit {

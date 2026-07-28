@@ -217,6 +217,45 @@ function pythonBlockHash(content: string, matchIndex: number): string {
   return shortHash(selected.join('\n').replace(/\s+/g, ' '))
 }
 
+function isMeaningfulSymbolName(name: string): boolean {
+  if (name.length < 3 || name.length > 120) return false
+  if (/^(?:const|let|var|function|class|interface|default|constructor)$/i.test(name)) return false
+  if (/^[A-Za-z]$/.test(name) || /^[_$][A-Za-z]?$/i.test(name)) return false
+  const letters = (name.match(/[A-Za-zА-Яа-яЁё]/g) ?? []).length
+  return letters >= Math.max(2, Math.floor(name.length * 0.45))
+}
+
+function looksMinifiedSource(path: string, content: string): boolean {
+  if (/\.min(?:\.[a-f0-9]{6,})?\.(?:js|css)$/i.test(path)) return true
+  if (content.length < 12_000) return false
+  const lines = content.split(/\r?\n/)
+  const longest = lines.reduce((max, line) => Math.max(max, line.length), 0)
+  return lines.length <= 4 || longest > 8_000
+}
+
+function pageTitle(content: string, path: string): string {
+  const title = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+    ?.replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return title || path.replace(/\.html?$/i, '')
+}
+
+function analyzeBrowserSnapshot(change: FileChange, file: SnapshotFile, facts: SemanticFact[]): void {
+  const content = file.content ?? ''
+  addFact(facts, {
+    code: 'browser_snapshot',
+    operation: change.status,
+    certainty: 'fact',
+    level: 'fallback',
+    confidence: 99,
+    subject: pageTitle(content, change.path),
+    path: change.path,
+    line: 1,
+    details: ['saved browser page', 'rendered HTML artifact, not source code'],
+  })
+}
+
 function extractNamedBlocks(content: string, path: string): NamedBlock[] {
   const extension = extensionOf(path)
   const output: NamedBlock[] = []
@@ -225,7 +264,7 @@ function extractNamedBlocks(content: string, path: string): NamedBlock[] {
     pattern.lastIndex = 0
     for (const match of content.matchAll(pattern)) {
       const name = match[nameGroup]?.trim()
-      if (!name || name.length > 120) continue
+      if (!name || !isMeaningfulSymbolName(name)) continue
       const resolvedKind = componentHint && /^[A-Z]/.test(name) ? 'component' : kind
       const key = `${resolvedKind}:${name}`
       if (seen.has(key)) continue
@@ -606,6 +645,26 @@ function analyzeFile(change: FileChange, from: Snapshot, to: Snapshot, facts: Se
   const afterContent = afterFile?.content ?? ''
   const language = languageOf(change.path)
   const startCount = facts.length
+  const activeFile = afterFile ?? beforeFile
+
+  if (activeFile?.analysisRole === 'artifact') {
+    analyzeBrowserSnapshot(change, activeFile, facts)
+    return { represented: true, ...(language ? { language } : {}) }
+  }
+
+  if (looksMinifiedSource(change.path, afterContent || beforeContent)) {
+    addFact(facts, {
+      code: 'external_dependency_bundle',
+      operation: change.status,
+      certainty: 'fact',
+      level: 'fallback',
+      confidence: 96,
+      subject: change.path,
+      path: change.path,
+      details: ['minified or generated bundle', 'excluded from symbol-level functional claims'],
+    })
+    return { represented: true, ...(language ? { language } : {}) }
+  }
 
   analyzeNamedBlocks(change.path, beforeContent, afterContent, facts)
   analyzeRouteDiff(change.path, beforeContent, afterContent, facts)
@@ -693,6 +752,8 @@ export function analyzeSemanticChanges(changes: FileChange[], from: Snapshot, to
   for (const change of changes) {
     const beforeFile: SnapshotFile | undefined = from.files[change.path]
     const afterFile: SnapshotFile | undefined = to.files[change.path]
+    const activeRole = afterFile?.analysisRole ?? beforeFile?.analysisRole ?? 'source'
+    if (activeRole === 'third_party' || activeRole === 'generated') continue
     if (change.binary || (beforeFile?.kind === 'binary' || afterFile?.kind === 'binary')) {
       binaryFiles += 1
       continue

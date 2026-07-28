@@ -1,7 +1,7 @@
 import JSZip, { type JSZipObject } from 'jszip'
 import { Archive } from 'libarchive.js'
 import { ArchiveAnalysisError, normalizeArchiveError } from './archive-errors'
-import type { Snapshot, SnapshotFile } from './types'
+import type { CapturePrecision, FileAnalysisRole, Snapshot, SnapshotFile, SnapshotProfile } from './types'
 
 const MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
 const MAX_FILE_BYTES = 16 * 1024 * 1024
@@ -33,7 +33,7 @@ const TEXT_EXTENSIONS = new Set([
 
 const TEXT_FILENAMES = new Set([
   'dockerfile', 'makefile', 'license', 'readme', 'changelog', 'composer.json',
-  'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.htaccess', '.bash_history',
 ])
 
 export interface ArchiveProgress {
@@ -95,10 +95,23 @@ function sanitizePath(value: string): string {
 }
 
 function shouldIgnore(path: string): boolean {
-  const segments = path.toLowerCase().split('/')
-  return segments.some((segment) => IGNORED_SEGMENTS.has(segment))
-    || path.endsWith('.map')
-    || path.includes('/.git/')
+  const normalized = path.toLowerCase()
+  const segments = normalized.split('/')
+  const hostingNoise = normalized === '.bash_history'
+    || normalized === 'tmp'
+    || normalized.startsWith('tmp/')
+    || normalized === 'logs'
+    || normalized.startsWith('logs/')
+    || normalized.startsWith('php-bin/')
+    || normalized.startsWith('php-bin-')
+    || /^email\/[^/]+\/.*\/\.maildir(?:\/|$)/.test(normalized)
+    || normalized.includes('/storage/logs/')
+    || normalized.endsWith('/storage/logs')
+
+  return hostingNoise
+    || segments.some((segment) => IGNORED_SEGMENTS.has(segment))
+    || normalized.endsWith('.map')
+    || normalized.includes('/.git/')
 }
 
 function isTextPath(path: string): boolean {
@@ -263,6 +276,114 @@ async function readMultiFormatEntries(file: File, onProgress?: (progress: Archiv
   }
 }
 
+
+const IDENTITY_STOPWORDS = new Set([
+  'www', 'admin', 'dev', 'test', 'stage', 'staging', 'local', 'localhost', 'com', 'ru', 'net', 'org', 'io', 'app', 'site',
+  'sslip', 'example', 'project', 'release', 'source', 'desktop', 'files', 'django', 'assets', 'static', 'public', 'index',
+  'api', 'client', 'server', 'application', 'website', 'readme', 'install', 'setup', 'version', 'windows', 'linux',
+  'google', 'googleapis', 'gstatic', 'jsdelivr', 'cloudflare', 'cloudfront', 'unpkg', 'npmjs', 'github', 'githubusercontent',
+  'telegram', 'bootstrapcdn', 'jquery', 'microsoft', 'apple', 'yandex', 'schema', 'w3', 'fonts', 'cdn',
+])
+
+function browserExportRoots(paths: string[]): string[] {
+  const rootHtml = paths.filter((path) => !path.includes('/') && /\.html?$/i.test(path))
+  return rootHtml
+    .map((path) => path.replace(/\.html?$/i, ''))
+    .filter((stem) => paths.some((path) => path.startsWith(`${stem}_files/`)))
+}
+
+function isThirdPartyOrGenerated(path: string): boolean {
+  const normalized = path.toLowerCase()
+  const fileName = normalized.split('/').at(-1) ?? normalized
+  return /(?:^|\/)(?:static\/admin|vendor|vendors|libs?|third[_-]?party)(?:\/|$)/i.test(normalized)
+    || /\.min(?:\.[a-f0-9]{6,})?\.(?:js|css)$/i.test(fileName)
+    || /\.[a-f0-9]{8,}\.(?:js|css)$/i.test(fileName)
+    || /(?:jquery|select2|xregexp|moment(?:-timezone)?|imask|nested_admin|relatedobjectlookups|datetimeShortcuts|urlify|prepopulate|nav_sidebar|dark_mode|responsive)\b/i.test(fileName)
+}
+
+function analysisRoleForPath(path: string, browserRoots: string[]): FileAnalysisRole {
+  const normalized = path.toLowerCase()
+  const browserRoot = browserRoots.find((root) => path === `${root}.html` || path === `${root}.htm` || path.startsWith(`${root}_files/`))
+  if (browserRoot) {
+    if (path === `${browserRoot}.html` || path === `${browserRoot}.htm`) return 'artifact'
+    return 'third_party'
+  }
+  if (isThirdPartyOrGenerated(path)) return 'generated'
+  if (/\/(?:compiled|generated|cache)(?:\/|$)/i.test(normalized)) return 'generated'
+  return 'source'
+}
+
+function normalizeIdentityToken(value: string): string | undefined {
+  const normalized = value.toLowerCase().replace(/^www\./, '').replace(/[^a-zа-яё0-9_-]+/giu, '-').replace(/^-+|-+$/g, '')
+  if (normalized.length < 4 || /^\d+$/.test(normalized) || IDENTITY_STOPWORDS.has(normalized)) return undefined
+  return normalized
+}
+
+function extractIdentityTokens(files: Record<string, SnapshotFile>): string[] {
+  const tokens = new Set<string>()
+  const text = Object.values(files)
+    .filter((file) => file.kind === 'text' && file.content && (file.analysisRole === 'source' || file.analysisRole === 'artifact'))
+    .slice(0, 80)
+    .map((file) => file.content!.slice(0, 80_000))
+    .join('\n')
+  const searchable = `${Object.keys(files).join('\n')}\n${text}`
+
+  for (const match of searchable.matchAll(/(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?/gi)) {
+    const host = match[1].toLowerCase()
+    for (const label of host.split('.')) {
+      const token = normalizeIdentityToken(label)
+      if (token) tokens.add(token)
+    }
+  }
+
+  for (const [path, file] of Object.entries(files)) {
+    const fileName = path.split('/').at(-1) ?? path
+    if (/package\.json$/i.test(fileName) && file.content) {
+      try {
+        const parsed = JSON.parse(file.content) as { name?: string }
+        const token = parsed.name ? normalizeIdentityToken(parsed.name.replace(/^@[^/]+\//, '')) : undefined
+        if (token) tokens.add(token)
+      } catch { /* malformed manifest */ }
+    }
+    if (/\.(?:dll|exe|jar)$/i.test(fileName)) {
+      const token = normalizeIdentityToken(fileName.replace(/\.[^.]+$/, '').replace(/\.(?:api|core|client|server)$/i, ''))
+      if (token) tokens.add(token)
+    }
+  }
+
+  return [...tokens].sort().slice(0, 24)
+}
+
+function buildSnapshotProfile(files: Record<string, SnapshotFile>, browserRoots: string[]): SnapshotProfile {
+  const values = Object.values(files)
+  const count = (role: FileAnalysisRole) => values.filter((file) => (file.analysisRole ?? 'source') === role).length
+  const sourceFiles = count('source')
+  const artifactFiles = count('artifact')
+  const thirdPartyFiles = count('third_party')
+  const generatedFiles = count('generated')
+  const binaryFiles = values.filter((file) => file.kind === 'binary').length
+  let kind: SnapshotProfile['kind'] = 'source'
+  if (browserRoots.length) kind = 'browser_export'
+  else if (binaryFiles >= 2 && values.filter((file) => (file.analysisRole ?? 'source') === 'source' && file.kind === 'text').length <= 3 && values.some((file) => /(?:readme|install)/i.test(file.path))) kind = 'binary_package'
+  else if (thirdPartyFiles + generatedFiles > sourceFiles) kind = 'mixed'
+
+  const warnings: string[] = []
+  if (kind === 'browser_export') warnings.push('The archive looks like pages saved by a browser, not a source-code snapshot.')
+  if (thirdPartyFiles || generatedFiles) warnings.push(`${thirdPartyFiles + generatedFiles} generated or third-party files are excluded from semantic code claims.`)
+  if (kind === 'binary_package') warnings.push('The archive is mainly a compiled binary package; source-code behavior cannot be reconstructed from binaries.')
+
+  return {
+    kind,
+    identityTokens: extractIdentityTokens(files),
+    sourceFiles,
+    artifactFiles,
+    thirdPartyFiles,
+    generatedFiles,
+    binaryFiles,
+    warnings,
+  }
+}
+
 async function entriesToSnapshot(
   file: File,
   entries: RawArchiveEntry[],
@@ -270,6 +391,7 @@ async function entriesToSnapshot(
     label?: string
     capturedAt?: string
     onProgress?: (progress: ArchiveProgress) => void
+    capturePrecision?: CapturePrecision
   },
 ): Promise<Snapshot> {
   if (entries.length === 0) {
@@ -292,6 +414,7 @@ async function entriesToSnapshot(
   const candidates = entries
     .map((entry) => ({ ...entry, path: stripRoot(entry.path, commonRoot) }))
     .filter((entry) => entry.path && !shouldIgnore(entry.path))
+  const detectedBrowserRoots = browserExportRoots(candidates.map((entry) => entry.path))
 
   const files: Record<string, SnapshotFile> = {}
   let totalBytes = 0
@@ -328,6 +451,7 @@ async function entriesToSnapshot(
       hash: await hashBytes(bytes),
       kind: textCandidate ? 'text' : 'binary',
       modifiedAt: entry.modifiedAt,
+      analysisRole: analysisRoleForPath(entry.path, detectedBrowserRoots),
       ...(content !== undefined ? { content } : {}),
     }
     totalBytes += bytes.byteLength
@@ -354,6 +478,8 @@ async function entriesToSnapshot(
     files,
     totalBytes,
     ignoredCount,
+    capturePrecision: options.capturePrecision ?? 'datetime',
+    profile: buildSnapshotProfile(files, detectedBrowserRoots),
   }
 }
 
@@ -363,6 +489,7 @@ export async function parseProjectArchive(
     label?: string
     capturedAt?: string
     onProgress?: (progress: ArchiveProgress) => void
+    capturePrecision?: CapturePrecision
   } = {},
 ): Promise<Snapshot> {
   if (!isSupportedArchive(file.name)) {

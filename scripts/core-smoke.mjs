@@ -16,7 +16,7 @@ assert.equal(categorizePath('src/db/migrations/001.sql'), 'database')
 assert.match(buildChangelog(report), /Reconstructed change sets/)
 
 const oldSnapshot = {
-  id: 'old', label: 'Full site', sourceName: 'site.zip', capturedAt: '2026-07-01T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0,
+  id: 'old', label: 'Full site', sourceName: 'site.zip', capturedAt: '2026-07-01T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0, profile: { kind: 'source', identityTokens: ['demo-project'], sourceFiles: 3, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
   files: {
     'www/site/index.php': { path: 'www/site/index.php', size: 1, hash: 'a', kind: 'text', content: 'old' },
     'www/site/admin.php': { path: 'www/site/admin.php', size: 1, hash: 'b', kind: 'text', content: 'admin' },
@@ -24,7 +24,7 @@ const oldSnapshot = {
   },
 }
 const moduleSnapshot = {
-  id: 'module', label: 'Cabinet module', sourceName: 'cabinet.zip', capturedAt: '2026-07-02T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  id: 'module', label: 'Cabinet module', sourceName: 'cabinet.zip', capturedAt: '2026-07-02T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0, profile: { kind: 'source', identityTokens: ['demo-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
   files: {
     'www/lk/auth/login.php': { path: 'www/lk/auth/login.php', size: 1, hash: 'd', kind: 'text', content: 'password_verify issue_code csrf' },
     'www/lk/schedule/index.php': { path: 'www/lk/schedule/index.php', size: 1, hash: 'e', kind: 'text', content: 'data-calendar' },
@@ -70,6 +70,47 @@ assert.equal(semanticTransition.commits[0].semantic.coveragePercent, 100)
 const forcedFull = compareSnapshots(oldSnapshot, moduleSnapshot, 'full')
 assert.equal(forcedFull.scope.resolvedMode, 'full')
 assert.equal(forcedFull.stats.filesRemoved, 3)
+
+
+const unrelatedOne = {
+  id: 'unrelated-one', label: 'Website', sourceName: 'website.zip', capturedAt: '2026-07-05T12:00:00.000Z', capturePrecision: 'date', totalBytes: 1, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['alpha-site'], sourceFiles: 1, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: { 'www/alpha-site.com/index.php': { path: 'www/alpha-site.com/index.php', size: 10, hash: 'alpha', kind: 'text', content: '<?php echo "alpha"; ?>', analysisRole: 'source' } },
+}
+const unrelatedTwo = {
+  id: 'unrelated-two', label: 'Game mod', sourceName: 'release.zip', capturedAt: '2026-07-06T12:00:00.000Z', capturePrecision: 'date', totalBytes: 1, ignoredCount: 0,
+  profile: { kind: 'binary_package', identityTokens: ['citiesharmony'], sourceFiles: 1, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 1, warnings: [] },
+  files: { 'README.txt': { path: 'README.txt', size: 10, hash: 'cities', kind: 'text', content: 'Cities Harmony mod', analysisRole: 'source' } },
+}
+const unrelatedTransition = compareSnapshots(unrelatedOne, unrelatedTwo, 'auto')
+assert.equal(unrelatedTransition.scope.comparisonAllowed, false)
+assert.equal(unrelatedTransition.scope.relationship, 'unconfirmed')
+assert.equal(unrelatedTransition.commits.length, 0)
+assert.equal(unrelatedTransition.changes.length, 0)
+
+const forcedUnrelated = compareSnapshots(unrelatedOne, unrelatedTwo, 'patch')
+assert.equal(forcedUnrelated.scope.comparisonAllowed, true)
+assert.equal(forcedUnrelated.scope.relationshipReason, 'manual_override')
+assert.equal(forcedUnrelated.commits.length, 1)
+
+const browserSnapshot = {
+  id: 'browser', label: 'Saved admin pages', sourceName: 'Desktop.rar', capturedAt: '2026-07-07T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'browser_export', identityTokens: ['mylomonosov'], sourceFiles: 0, artifactFiles: 1, thirdPartyFiles: 1, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'Student admin.html': { path: 'Student admin.html', size: 10, hash: 'page', kind: 'text', content: '<title>Edit student | Django admin</title><form method="post"></form>', analysisRole: 'artifact' },
+    'Student admin_files/jquery.min.js': { path: 'Student admin_files/jquery.min.js', size: 10, hash: 'jquery', kind: 'text', content: 'function a(){}', analysisRole: 'third_party' },
+  },
+}
+const browserForced = compareSnapshots(unrelatedOne, browserSnapshot, 'patch')
+assert.equal(browserForced.changes.length, 1)
+assert.ok(browserForced.commits[0].semantic.facts.some((fact) => fact.code === 'browser_snapshot'))
+assert.ok(!browserForced.commits[0].semantic.facts.some((fact) => fact.subject === 'a'))
+
+const mixedSequenceReport = analyzeSnapshots([unrelatedOne, browserSnapshot, unrelatedTwo], { comparisonMode: 'auto' })
+assert.equal(mixedSequenceReport.transitions.length, 2)
+assert.ok(mixedSequenceReport.transitions.every((transition) => transition.scope.comparisonAllowed === false))
+assert.equal(mixedSequenceReport.totals.inferredCommits, 0)
+assert.equal(mixedSequenceReport.totals.semanticFacts, 0)
 
 console.log('Core smoke test passed:', {
   transitions: report.transitions.length,

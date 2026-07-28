@@ -134,9 +134,34 @@ function summarizeStats(changes: FileChange[]): ChangeStats {
   }, { filesAdded: 0, filesModified: 0, filesRemoved: 0, linesAdded: 0, linesRemoved: 0 })
 }
 
+function comparablePaths(snapshot: Snapshot): string[] {
+  return Object.values(snapshot.files)
+    .filter((file) => !file.analysisRole || file.analysisRole === 'source' || file.analysisRole === 'artifact')
+    .map((file) => file.path)
+}
+
+function fallbackIdentityTokens(snapshot: Snapshot): string[] {
+  if (snapshot.profile?.identityTokens?.length) return snapshot.profile.identityTokens
+  const tokens = new Set<string>()
+  const searchable = Object.keys(snapshot.files).join('\n').toLowerCase()
+  for (const match of searchable.matchAll(/(?:^|\/)(?:www\.|lk\.|admin\.|dev\.)?([a-z0-9][a-z0-9_-]{3,})\.(?:com|ru|net|org|io|dev|app)(?:\/|$)/g)) {
+    tokens.add(match[1])
+  }
+  return [...tokens]
+}
+
+function sharedContentHashes(from: Snapshot, to: Snapshot): number {
+  const fromHashes = new Set(Object.values(from.files)
+    .filter((file) => (!file.analysisRole || file.analysisRole === 'source') && file.size >= 64)
+    .map((file) => file.hash))
+  return new Set(Object.values(to.files)
+    .filter((file) => (!file.analysisRole || file.analysisRole === 'source') && file.size >= 64 && fromHashes.has(file.hash))
+    .map((file) => file.hash)).size
+}
+
 function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode): ScopeAnalysis {
-  const fromPaths = Object.keys(from.files)
-  const toPaths = Object.keys(to.files)
+  const fromPaths = comparablePaths(from)
+  const toPaths = comparablePaths(to)
   const commonPaths = fromPaths.filter((path) => path in to.files)
   const modifiedCommonPathCount = commonPaths.filter((path) => from.files[path].hash !== to.files[path].hash).length
   const unchangedCommonPathCount = commonPaths.length - modifiedCommonPathCount
@@ -144,39 +169,69 @@ function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMod
   const toOnlyPathCount = toPaths.length - commonPaths.length
   const smallerCount = Math.max(Math.min(fromPaths.length, toPaths.length), 1)
   const overlapOfSmallerSnapshot = commonPaths.length / smallerCount
+  const fromIdentities = new Set(fallbackIdentityTokens(from))
+  const sharedIdentityTokens = fallbackIdentityTokens(to).filter((token) => fromIdentities.has(token))
+  const sharedContentHashCount = sharedContentHashes(from, to)
 
-  let resolvedMode: ResolvedComparisonMode
-  let reason: ScopeAnalysis['reason']
+  let relationship: ScopeAnalysis['relationship'] = 'unconfirmed'
+  let relationshipReason: ScopeAnalysis['relationshipReason'] = 'no_project_evidence'
+  let relationshipConfidencePercent = 10
 
-  if (requestedMode === 'full') {
-    resolvedMode = 'full'
-    reason = 'manual_full'
-  } else if (requestedMode === 'patch') {
-    resolvedMode = 'patch'
-    reason = 'manual_patch'
-  } else if (commonPaths.length === 0) {
-    resolvedMode = 'patch'
-    reason = 'no_common_paths'
-  } else if (overlapOfSmallerSnapshot < 0.25) {
-    resolvedMode = 'patch'
-    reason = 'low_overlap'
-  } else if (toPaths.length < fromPaths.length * 0.7 && commonPaths.length / Math.max(toPaths.length, 1) < 0.55) {
-    resolvedMode = 'patch'
-    reason = 'partial_snapshot'
-  } else {
-    resolvedMode = 'full'
-    reason = 'sufficient_overlap'
+  if (commonPaths.length > 0) {
+    relationship = 'related'
+    relationshipReason = 'common_paths'
+    relationshipConfidencePercent = Math.min(99, 70 + Math.round(overlapOfSmallerSnapshot * 29))
+  } else if (sharedIdentityTokens.length > 0) {
+    relationship = 'related'
+    relationshipReason = 'shared_identity'
+    relationshipConfidencePercent = Math.min(96, 78 + sharedIdentityTokens.length * 5)
+  } else if (sharedContentHashCount >= 2) {
+    relationship = 'related'
+    relationshipReason = 'shared_content'
+    relationshipConfidencePercent = Math.min(90, 60 + sharedContentHashCount * 5)
+  } else if (requestedMode !== 'auto') {
+    relationship = 'related'
+    relationshipReason = 'manual_override'
+    relationshipConfidencePercent = 35
+  }
+
+  const comparisonAllowed = relationship === 'related'
+  let resolvedMode: ResolvedComparisonMode = 'patch'
+  let reason: ScopeAnalysis['reason'] = 'relationship_unconfirmed'
+
+  if (comparisonAllowed) {
+    if (requestedMode === 'full') {
+      resolvedMode = 'full'
+      reason = 'manual_full'
+    } else if (requestedMode === 'patch') {
+      resolvedMode = 'patch'
+      reason = 'manual_patch'
+    } else if (commonPaths.length === 0) {
+      resolvedMode = 'patch'
+      reason = 'no_common_paths'
+    } else if (overlapOfSmallerSnapshot < 0.25) {
+      resolvedMode = 'patch'
+      reason = 'low_overlap'
+    } else if (toPaths.length < fromPaths.length * 0.7 && commonPaths.length / Math.max(toPaths.length, 1) < 0.55) {
+      resolvedMode = 'patch'
+      reason = 'partial_snapshot'
+    } else {
+      resolvedMode = 'full'
+      reason = 'sufficient_overlap'
+    }
   }
 
   let historyConfidence: HistoryConfidence = 'low'
-  let historyConfidencePercent = 28
-  if (resolvedMode === 'full' && overlapOfSmallerSnapshot >= 0.75) {
+  let historyConfidencePercent = comparisonAllowed ? 28 : 0
+  if (relationshipReason === 'manual_override') {
+    historyConfidencePercent = 18
+  } else if (resolvedMode === 'full' && overlapOfSmallerSnapshot >= 0.75) {
     historyConfidence = 'high'
     historyConfidencePercent = 78
   } else if (resolvedMode === 'full' && overlapOfSmallerSnapshot >= 0.4) {
     historyConfidence = 'medium'
     historyConfidencePercent = 62
-  } else if (requestedMode === 'patch') {
+  } else if (requestedMode === 'patch' && comparisonAllowed) {
     historyConfidence = 'medium'
     historyConfidencePercent = 52
   } else if (commonPaths.length > 0) {
@@ -195,11 +250,17 @@ function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMod
     fromOnlyPathCount,
     toOnlyPathCount,
     overlapOfSmallerSnapshot,
-    removalsReliable: resolvedMode === 'full',
-    ignoredPotentialRemovals: resolvedMode === 'patch' ? fromOnlyPathCount : 0,
+    removalsReliable: comparisonAllowed && resolvedMode === 'full',
+    ignoredPotentialRemovals: comparisonAllowed && resolvedMode === 'patch' ? fromOnlyPathCount : 0,
     historyConfidence,
     historyConfidencePercent,
     reason,
+    relationship,
+    comparisonAllowed,
+    relationshipConfidencePercent,
+    sharedIdentityTokens,
+    sharedContentHashCount,
+    relationshipReason,
   }
 }
 
@@ -275,7 +336,20 @@ function inferTransitionCommit(id: string, changes: FileChange[], from: Snapshot
 
 export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode = 'auto'): VersionTransition {
   const scope = resolveScope(from, to, requestedMode)
-  const paths = new Set([...Object.keys(from.files), ...Object.keys(to.files)])
+  const id = `${from.id}-${to.id}`
+  if (!scope.comparisonAllowed) {
+    return {
+      id,
+      from,
+      to,
+      scope,
+      stats: summarizeStats([]),
+      changes: [],
+      commits: [],
+    }
+  }
+
+  const paths = new Set([...comparablePaths(from), ...comparablePaths(to)])
   const changes: FileChange[] = []
 
   for (const path of [...paths].sort()) {
@@ -287,7 +361,6 @@ export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: Co
     else if (before && after && before.hash !== after.hash) changes.push(makeChange(path, 'modified', before, after))
   }
 
-  const id = `${from.id}-${to.id}`
   return {
     id,
     from,
@@ -354,6 +427,10 @@ export function buildChangelog(report: AnalysisReport): string {
     lines.push(`## ${transition.to.label} — ${formatDate(transition.to.capturedAt)}`, '')
     lines.push(`- Comparison mode: ${transition.scope.resolvedMode}`)
     lines.push(`- Matching paths: ${transition.scope.commonPathCount}`)
+    if (!transition.scope.comparisonAllowed) {
+      lines.push('- Transition skipped: the archives could not be confirmed as versions of the same project.', '')
+      continue
+    }
     if (!transition.scope.removalsReliable) lines.push(`- ${transition.scope.ignoredPotentialRemovals} absent previous paths were not treated as deletions.`)
     if (!transition.changes.length) {
       lines.push('- No supported file changes detected.', '')
@@ -401,7 +478,8 @@ export function buildMarkdownReport(report: AnalysisReport): string {
   ]
 
   for (const snapshot of report.snapshots) {
-    lines.push(`- **${snapshot.label}** — ${Object.keys(snapshot.files).length} files, ${formatBytes(snapshot.totalBytes)}, source: \`${snapshot.sourceName}\``)
+    const profile = snapshot.profile ? `, kind: ${snapshot.profile.kind}, source files: ${snapshot.profile.sourceFiles}, generated/third-party: ${snapshot.profile.generatedFiles + snapshot.profile.thirdPartyFiles}` : ''
+    lines.push(`- **${snapshot.label}** — ${Object.keys(snapshot.files).length} files, ${formatBytes(snapshot.totalBytes)}, source: \`${snapshot.sourceName}\`${profile}`)
   }
 
   lines.push('', buildChangelog(report))

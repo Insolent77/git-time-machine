@@ -1,48 +1,51 @@
 # Git Time Machine
 
-> Reconstruct a plausible development history from old project archives — entirely in the browser.
+> Reconstruct a reviewable development history from dated project archives — entirely in the browser.
 
-Git Time Machine compares multiple ZIP snapshots of the same project, detects file-level changes, estimates added and removed lines, groups related work into inferred commits, and exports a reviewable `CHANGELOG.md`.
+Git Time Machine compares ZIP, RAR, 7z, TAR and compressed archive snapshots, detects file and structural changes, analyzes source code semantically, and writes human-readable reconstructed change sets.
 
-The application is designed for developers who inherited a project without Git history, kept dated backup archives, or need to document how a prototype evolved.
+It does **not** claim to recover the original Git commits. It produces an evidence-based draft and clearly separates confirmed facts, static inferences, generated artifacts, and transitions that cannot safely be compared.
 
-## Why this project exists
+## Main capabilities
 
-Real projects are not always born inside a clean Git repository. Freelancers and small teams often have folders named:
+- ZIP, RAR, 7z, TAR, GZ, BZ2 and XZ archives
+- Fully local browser processing through JSZip and libarchive.js/WebAssembly
+- Automatic detection of full snapshots versus modules/patches
+- Automatic relationship check before two archives are compared
+- No commit is generated when archives cannot be confirmed as versions of the same project
+- Detection of browser-saved page exports and compiled binary release packages
+- Exclusion of minified, generated, vendored and third-party assets from source-code claims
+- SHA-256 comparison for matching files
+- Added, modified and reliably removed file detection
+- Functional semantic analysis for PHP, JavaScript, TypeScript, SQL, HTML, CSS and other text formats
+- Functions, classes, routes, API calls, SQL tables, fields, indexes, forms, dependencies, tests and configuration detection
+- Human-readable functional commit descriptions with evidence and confidence
+- Explicit fallback descriptions where the exact purpose cannot be determined
+- Five interface languages: English, Russian, Chinese, German and Spanish
+- Detailed TXT and JSON exports
+- GitHub Pages deployment workflow
 
-```text
-project-final.zip
-project-final-2.zip
-project-21-07-updated.zip
-project-really-final.zip
-```
+## Important safeguards
 
-Git Time Machine turns that archive pile into a structured, transparent reconstruction. It does **not** claim to recover the original commits; it creates an evidence-based draft that a developer can review and edit.
+### Unrelated archives
 
-## Features
+In automatic mode a transition is skipped when there are no:
 
-- Multi-archive ZIP upload with editable version names and dates
-- 100% client-side processing; source code is not uploaded to a server
-- Automatic removal of a shared top-level archive folder
-- Ignores common generated folders such as `node_modules`, `.git`, `dist`, `build`, and caches
-- SHA-256 content comparison
-- Added, modified, and removed file detection
-- Text line delta estimation with a bounded LCS algorithm
-- Change classification: auth, database, admin, API, UI, styles, tests, docs, config, dependencies, assets
-- Inferred commit titles, descriptions, affected files, and confidence scores
-- Timeline, searchable file view, and Markdown preview
-- Export to `CHANGELOG.md`, full Markdown report, and JSON
-- Built-in demo mode
-- Automatic GitHub Pages deployment
+- matching analyzable paths;
+- shared project identifiers such as the same domain or package name;
+- repeated source files by SHA-256.
 
-## Tech stack
+This prevents a website archive, a browser export from another admin panel and an unrelated binary release from being merged into one fictional Git history.
 
-- React
-- TypeScript
-- Vite
-- JSZip
-- Web Crypto API
-- GitHub Actions + GitHub Pages
+A manual **Module / patch** override is still available when the developer knows that two differently structured archives belong to the same project.
+
+### Browser exports
+
+Folders created by “Save page as…” usually contain HTML plus copied Django, jQuery, Select2 and other static assets. Git Time Machine classifies these as rendered artifacts rather than authored source code. Minified library functions such as `a`, `$`, `AjaxAdapter` and similar symbols are not emitted as project changes.
+
+### Binary packages
+
+DLL, EXE and similar compiled files can be inventoried and hashed, but their internal functional source changes are not invented. The report explicitly states this limitation.
 
 ## Local development
 
@@ -50,88 +53,44 @@ Requirements: Node.js 22+
 
 ```bash
 npm install
-npm run dev
-```
-
-Production build:
-
-```bash
 npm run test:core
 npm run build
-npm run preview
+npm run dev
 ```
 
 ## Deploy to GitHub Pages
 
-The repository is preconfigured for a project named `git-time-machine`.
+1. Push the project to the `main` branch.
+2. Open **Settings → Pages** in the repository.
+3. Select **GitHub Actions** as the source.
+4. Wait for the deployment workflow to complete.
 
-1. Create a GitHub repository named `git-time-machine`.
-2. Push this project to the `main` branch.
-3. Open **Settings → Pages**.
-4. Set **Source** to **GitHub Actions**.
-5. Open the **Actions** tab and wait for the deploy workflow to finish.
-
-The site URL will be:
+Project URL:
 
 ```text
 https://YOUR_USERNAME.github.io/git-time-machine/
 ```
 
-For a different repository name, change `base` in `vite.config.ts`.
+## Analysis pipeline
 
-## How the inference works
+1. Extract and normalize archive paths.
+2. Remove hosting logs, caches, dependencies and known generated folders.
+3. Profile the archive as source snapshot, browser export, binary package or mixed archive.
+4. Extract project identity hints from domains, manifests and binary names.
+5. Verify that adjacent archives plausibly belong to one project.
+6. Resolve full-snapshot versus module/patch semantics.
+7. Compare hashes and text changes only for relevant project files.
+8. Run structural and functional semantic analysis.
+9. Produce one reconstructed change set per valid archive transition.
+10. Mark evidence, confidence, limitations and items requiring review.
 
-For every adjacent pair of snapshots, the analyzer:
+## Limits
 
-1. Builds a normalized map of project files.
-2. Compares SHA-256 hashes to detect changes.
-3. Estimates line additions and removals for text files.
-4. Categorizes file paths using explainable rules.
-5. Groups changes by category into inferred commits.
-6. Calculates a confidence score from path and group signals.
-
-This is intentionally deterministic and explainable. No external AI API is required.
-
-## Privacy and limits
-
-- Files stay in the browser.
-- Classic ZIP files are supported in the MVP.
-- Encrypted and multi-volume archives are not supported.
-- RAR and 7z are planned.
-- Archives are limited to 200 MB, individual files to 12 MB, and 6,000 entries.
-- Generated folders are ignored to reduce noise and browser memory usage.
-- The reconstructed history is a hypothesis, not cryptographic proof of authorship or the original commit sequence.
-
-## Roadmap
-
-- [ ] RAR and 7z support through WebAssembly
-- [ ] Web Worker processing for very large archives
-- [ ] Drag-and-drop version reordering
-- [ ] Semantic AST diff for TypeScript, JavaScript, PHP, and Python
-- [ ] Rename detection
-- [ ] Screenshot-based visual UI diff
-- [ ] Export a shell script that recreates inferred Git commits
-- [ ] Editable commit grouping and titles
-- [ ] Save and reopen analysis sessions
-- [ ] CLI version
-
-## Project structure
-
-```text
-src/
-  lib/
-    analyzer.ts   # deterministic comparison and commit inference
-    demo.ts       # built-in example snapshots
-    download.ts   # browser exports
-    types.ts      # domain model
-    zip.ts        # secure browser-side ZIP processing
-  App.tsx         # product UI
-  styles.css      # responsive visual system
-```
-
-## Safety notes
-
-Archive contents are treated as data. The app does not execute uploaded code. Paths are normalized, traversal segments are removed, and oversized entries are skipped.
+- Uploaded code is never executed.
+- Static analysis cannot prove runtime behavior.
+- Encrypted and multipart archives are not supported.
+- Generated output may hide the original source intent.
+- Original Git commit boundaries, authors and exact timestamps cannot be recovered without Git metadata.
 
 ## License
 

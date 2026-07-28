@@ -3,7 +3,7 @@ import { analyzeSnapshots, formatBytes } from './lib/analyzer'
 import { ArchiveAnalysisError, normalizeArchiveError } from './lib/archive-errors'
 import { copyText, downloadText } from './lib/download'
 import { makeDemoSnapshots } from './lib/demo'
-import type { AnalysisReport, ChangeStatus } from './lib/types'
+import type { AnalysisReport, ChangeStatus, ComparisonMode } from './lib/types'
 import {
   ARCHIVE_ACCEPT,
   SUPPORTED_ARCHIVE_EXTENSIONS,
@@ -19,8 +19,12 @@ import {
   buildCommitDossier,
   buildDetailedReport,
   categoryLabel,
+  comparisonModeLabel,
   formatLocalizedDate,
+  historyConfidenceLabel,
   lineDeltaLabel,
+  scopeDiagnostic,
+  snapshotDiagnostic,
   statusLabel,
   type CommitStatusMode,
   type Language,
@@ -116,6 +120,10 @@ function App() {
     const value = window.localStorage.getItem('gtm-commit-status')
     return value === 'implemented' || value === 'verified' ? value : 'reconstructed'
   })
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>(() => {
+    const value = window.localStorage.getItem('gtm-comparison-mode')
+    return value === 'full' || value === 'patch' ? value : 'auto'
+  })
   const c = COPY[language]
 
   useEffect(() => {
@@ -127,7 +135,8 @@ function App() {
     window.localStorage.setItem('gtm-domain', domain)
     window.localStorage.setItem('gtm-source-note', sourceNote)
     window.localStorage.setItem('gtm-commit-status', commitStatus)
-  }, [domain, sourceNote, commitStatus])
+    window.localStorage.setItem('gtm-comparison-mode', comparisonMode)
+  }, [domain, sourceNote, commitStatus, comparisonMode])
 
   const commitRows = useMemo(() => {
     if (!report) return []
@@ -223,12 +232,13 @@ function App() {
             label: archive.label,
             capturedAt: dateToIso(archive.date),
             onProgress: setProgress,
+            capturePrecision: 'date',
           }))
         } catch (error) {
           throw normalizeArchiveError(error, archive.file.name)
         }
       }
-      setReport(analyzeSnapshots(snapshots))
+      setReport(analyzeSnapshots(snapshots, { comparisonMode }))
       setView('commits')
       requestAnimationFrame(() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' }))
     } catch (error) {
@@ -242,7 +252,7 @@ function App() {
   function runDemo() {
     setIssue(null)
     setArchives([])
-    setReport(analyzeSnapshots(makeDemoSnapshots()))
+    setReport(analyzeSnapshots(makeDemoSnapshots(), { comparisonMode }))
     setView('commits')
     requestAnimationFrame(() => document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' }))
   }
@@ -361,6 +371,7 @@ function App() {
                   <label><span>{c.projectDomain} / {c.optional}</span><input placeholder="admin.example.com" value={domain} onChange={(event: ChangeEvent<HTMLInputElement>) => setDomain(event.target.value)} /></label>
                   <label><span>{c.sourceNote} / {c.optional}</span><input placeholder="User request / task / archive source" value={sourceNote} onChange={(event: ChangeEvent<HTMLInputElement>) => setSourceNote(event.target.value)} /></label>
                   <label><span>{c.status}</span><select value={commitStatus} onChange={(event: ChangeEvent<HTMLSelectElement>) => setCommitStatus(event.target.value as CommitStatusMode)}><option value="reconstructed">{c.statusReconstructed}</option><option value="implemented">{c.statusImplemented}</option><option value="verified">{c.statusVerified}</option></select></label>
+                  <label><span>{language === 'ru' ? 'Режим сравнения' : 'Comparison mode'}</span><select value={comparisonMode} onChange={(event: ChangeEvent<HTMLSelectElement>) => setComparisonMode(event.target.value as ComparisonMode)}><option value="auto">{comparisonModeLabel(language, 'auto')}</option><option value="full">{comparisonModeLabel(language, 'full')}</option><option value="patch">{comparisonModeLabel(language, 'patch')}</option></select></label>
                 </div>
               </details>
 
@@ -394,6 +405,26 @@ function App() {
               ))}
             </nav>
 
+            {report.snapshots.map((snapshot) => {
+              const diagnostic = snapshotDiagnostic(language, snapshot)
+              return diagnostic ? (
+                <section className="scope-notice" key={`snapshot-${snapshot.id}`}>
+                  <strong>{diagnostic.title}</strong>
+                  <p>{diagnostic.body}</p>
+                </section>
+              ) : null
+            })}
+
+            {report.transitions.map((transition) => {
+              const diagnostic = scopeDiagnostic(language, transition.scope)
+              return diagnostic ? (
+                <section className="scope-notice" key={`scope-${transition.id}`}>
+                  <strong>{diagnostic.title}</strong>
+                  <p>{diagnostic.body}</p>
+                </section>
+              ) : null
+            })}
+
             {view === 'commits' && (
               <div className="commit-stream">
                 {commitRows.length ? commitRows.map(({ transition, commit, serial }, index) => {
@@ -404,7 +435,7 @@ function App() {
                       <summary>
                         <span>LOCAL-{String(serial).padStart(4, '0')}</span>
                         <strong>{categoryLabel(language, commit.category)}</strong>
-                        <small>{formatLocalizedDate(transition.to.capturedAt, language)} · {commit.confidence}% {c.confidence}</small>
+                        <small>{formatLocalizedDate(transition.to.capturedAt, language)} · {historyConfidenceLabel(language, transition.scope.historyConfidence)} / {commit.confidence}%</small>
                         <i>＋</i>
                       </summary>
                       <div className="commit-content">
@@ -413,7 +444,9 @@ function App() {
                       </div>
                     </details>
                   )
-                }) : <p className="empty-result">{c.noChanges}</p>}
+                }) : <p className="empty-result">{report.transitions.some((transition) => !transition.scope.comparisonAllowed)
+                  ? (language === 'ru' ? 'Коммиты не сформированы: связь между загруженными архивами не подтверждена.' : 'No commits were generated because the uploaded archives could not be confirmed as versions of the same project.')
+                  : c.noChanges}</p>}
               </div>
             )}
 
