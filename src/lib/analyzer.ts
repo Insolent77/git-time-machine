@@ -2,12 +2,18 @@ import type {
   AnalysisReport,
   ChangeCategory,
   ChangeStats,
+  ComparisonMode,
+  FeatureTag,
   FileChange,
+  HistoryConfidence,
   InferredCommit,
+  ResolvedComparisonMode,
+  ScopeAnalysis,
   Snapshot,
   SnapshotFile,
   VersionTransition,
 } from './types'
+import { analyzeSemanticChanges } from './semantic.js'
 
 const CATEGORY_LABELS: Record<ChangeCategory, string> = {
   auth: 'Авторизация и доступ',
@@ -24,33 +30,18 @@ const CATEGORY_LABELS: Record<ChangeCategory, string> = {
   other: 'Прочие изменения',
 }
 
-const CATEGORY_TITLES: Record<ChangeCategory, string> = {
-  auth: 'Развита система авторизации и доступа',
-  database: 'Обновлена структура и работа с данными',
-  admin: 'Расширена административная панель',
-  api: 'Обновлена API- и серверная логика',
-  ui: 'Улучшен пользовательский интерфейс',
-  styles: 'Доработано оформление и адаптивность',
-  tests: 'Добавлены проверки и тестовые сценарии',
-  docs: 'Актуализирована документация проекта',
-  config: 'Обновлена конфигурация и инфраструктура',
-  deps: 'Обновлены зависимости проекта',
-  assets: 'Обновлены изображения и статические ресурсы',
-  other: 'Доработана логика проекта',
-}
-
 const CATEGORY_PATTERNS: Array<[ChangeCategory, RegExp[]]> = [
   ['auth', [/auth/i, /login/i, /logout/i, /password/i, /session/i, /token/i, /permission/i, /role/i, /доступ/i]],
-  ['database', [/migration/i, /schema/i, /database/i, /\bdb\b/i, /models?\./i, /entities/i, /repository/i, /sql$/i]],
+  ['database', [/migration/i, /schema/i, /database/i, /personal_account/i, /\bdb\b/i, /models?\./i, /entities/i, /repository/i, /\.sql$/i]],
   ['admin', [/admin/i, /dashboard/i, /backoffice/i, /moderation/i]],
-  ['api', [/\/api\//i, /controller/i, /service/i, /route/i, /endpoint/i, /server/i, /backend/i, /\.php$/i]],
-  ['tests', [/test/i, /spec/i, /__tests__/i, /playwright/i, /cypress/i, /vitest/i, /jest/i]],
-  ['docs', [/readme/i, /changelog/i, /docs?\//i, /\.md$/i, /license/i]],
+  ['tests', [/(^|\/)tests?\//i, /\.spec\./i, /\.test\./i, /__tests__/i, /playwright/i, /cypress/i, /vitest/i, /jest/i]],
+  ['docs', [/readme/i, /changelog/i, /docs?\//i, /install/i, /\.md$/i, /license/i]],
   ['deps', [/package-lock\.json$/i, /package\.json$/i, /pnpm-lock/i, /yarn\.lock/i, /composer\.lock/i, /requirements\.txt$/i, /poetry\.lock/i]],
-  ['config', [/\.github\//i, /docker/i, /nginx/i, /\.env/i, /config/i, /vite\.config/i, /tsconfig/i, /eslint/i, /prettier/i, /\.ya?ml$/i]],
+  ['config', [/\.github\//i, /docker/i, /nginx/i, /\.htaccess$/i, /\.env/i, /config/i, /vite\.config/i, /tsconfig/i, /eslint/i, /prettier/i, /\.ya?ml$/i]],
   ['styles', [/\.css$/i, /\.scss$/i, /\.sass$/i, /\.less$/i, /tailwind/i, /styles?\//i]],
-  ['ui', [/components?\//i, /pages?\//i, /views?\//i, /templates?\//i, /\.tsx$/i, /\.jsx$/i, /\.vue$/i, /\.svelte$/i, /\.html$/i]],
-  ['assets', [/assets?\//i, /public\//i, /uploads?\//i, /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm|pdf)$/i]],
+  ['ui', [/components?\//i, /pages?\//i, /views?\//i, /templates?\//i, /schedule/i, /homework/i, /payments/i, /settings/i, /contract/i, /\.tsx$/i, /\.jsx$/i, /\.vue$/i, /\.svelte$/i, /\.html$/i]],
+  ['assets', [/assets?\//i, /public\//i, /uploads?\//i, /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm|pdf|docx|zip)$/i]],
+  ['api', [/\/api\//i, /controller/i, /service/i, /route/i, /endpoint/i, /server/i, /backend/i, /\.php$/i]],
 ]
 
 function stableId(value: string): string {
@@ -98,10 +89,7 @@ function lineDelta(before?: string, after?: string): { added: number; removed: n
     }
 
     const common = previous[newLines.length]
-    return {
-      added: newLines.length - common,
-      removed: oldLines.length - common,
-    }
+    return { added: newLines.length - common, removed: oldLines.length - common }
   }
 
   const counts = new Map<string, number>()
@@ -116,10 +104,7 @@ function lineDelta(before?: string, after?: string): { added: number; removed: n
     }
   }
 
-  return {
-    added: newLines.length - common,
-    removed: oldLines.length - common,
-  }
+  return { added: newLines.length - common, removed: oldLines.length - common }
 }
 
 function makeChange(path: string, status: FileChange['status'], before?: SnapshotFile, after?: SnapshotFile): FileChange {
@@ -146,58 +131,150 @@ function summarizeStats(changes: FileChange[]): ChangeStats {
     stats.linesAdded += change.addedLines
     stats.linesRemoved += change.removedLines
     return stats
-  }, {
-    filesAdded: 0,
-    filesModified: 0,
-    filesRemoved: 0,
-    linesAdded: 0,
-    linesRemoved: 0,
-  })
+  }, { filesAdded: 0, filesModified: 0, filesRemoved: 0, linesAdded: 0, linesRemoved: 0 })
 }
 
-function describeCommit(category: ChangeCategory, changes: FileChange[]): string {
-  const stats = summarizeStats(changes)
-  const actions: string[] = []
-  if (stats.filesAdded) actions.push(`добавлено файлов: ${stats.filesAdded}`)
-  if (stats.filesModified) actions.push(`изменено: ${stats.filesModified}`)
-  if (stats.filesRemoved) actions.push(`удалено: ${stats.filesRemoved}`)
+function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode): ScopeAnalysis {
+  const fromPaths = Object.keys(from.files)
+  const toPaths = Object.keys(to.files)
+  const commonPaths = fromPaths.filter((path) => path in to.files)
+  const modifiedCommonPathCount = commonPaths.filter((path) => from.files[path].hash !== to.files[path].hash).length
+  const unchangedCommonPathCount = commonPaths.length - modifiedCommonPathCount
+  const fromOnlyPathCount = fromPaths.length - commonPaths.length
+  const toOnlyPathCount = toPaths.length - commonPaths.length
+  const smallerCount = Math.max(Math.min(fromPaths.length, toPaths.length), 1)
+  const overlapOfSmallerSnapshot = commonPaths.length / smallerCount
 
-  const importantPaths = [...changes]
-    .sort((left, right) => (right.addedLines + right.removedLines + right.sizeAfter) - (left.addedLines + left.removedLines + left.sizeAfter))
-    .slice(0, 3)
-    .map((change) => change.path)
+  let resolvedMode: ResolvedComparisonMode
+  let reason: ScopeAnalysis['reason']
 
-  return `${CATEGORY_LABELS[category]}: ${actions.join(', ') || 'обновлены связанные файлы'}. Ключевые файлы: ${importantPaths.join(', ')}.`
-}
-
-function calculateConfidence(category: ChangeCategory, changes: FileChange[]): number {
-  const pathSignal = changes.filter((change) => categorizePath(change.path) === category).length / Math.max(changes.length, 1)
-  const fileSignal = Math.min(changes.length / 6, 1)
-  const confidence = 0.58 + pathSignal * 0.27 + fileSignal * 0.1
-  return Math.round(Math.min(confidence, 0.95) * 100)
-}
-
-function inferCommits(transitionId: string, changes: FileChange[]): InferredCommit[] {
-  const grouped = new Map<ChangeCategory, FileChange[]>()
-  for (const change of changes) {
-    const current = grouped.get(change.category) ?? []
-    current.push(change)
-    grouped.set(change.category, current)
+  if (requestedMode === 'full') {
+    resolvedMode = 'full'
+    reason = 'manual_full'
+  } else if (requestedMode === 'patch') {
+    resolvedMode = 'patch'
+    reason = 'manual_patch'
+  } else if (commonPaths.length === 0) {
+    resolvedMode = 'patch'
+    reason = 'no_common_paths'
+  } else if (overlapOfSmallerSnapshot < 0.25) {
+    resolvedMode = 'patch'
+    reason = 'low_overlap'
+  } else if (toPaths.length < fromPaths.length * 0.7 && commonPaths.length / Math.max(toPaths.length, 1) < 0.55) {
+    resolvedMode = 'patch'
+    reason = 'partial_snapshot'
+  } else {
+    resolvedMode = 'full'
+    reason = 'sufficient_overlap'
   }
 
-  return [...grouped.entries()]
-    .sort(([, left], [, right]) => right.length - left.length)
-    .map(([category, categoryChanges], index) => ({
-      id: `${transitionId}-${index}-${stableId(categoryChanges.map((change) => change.path).join('|'))}`,
-      category,
-      title: CATEGORY_TITLES[category],
-      description: describeCommit(category, categoryChanges),
-      confidence: calculateConfidence(category, categoryChanges),
-      changes: categoryChanges.sort((left, right) => left.path.localeCompare(right.path)),
-    }))
+  let historyConfidence: HistoryConfidence = 'low'
+  let historyConfidencePercent = 28
+  if (resolvedMode === 'full' && overlapOfSmallerSnapshot >= 0.75) {
+    historyConfidence = 'high'
+    historyConfidencePercent = 78
+  } else if (resolvedMode === 'full' && overlapOfSmallerSnapshot >= 0.4) {
+    historyConfidence = 'medium'
+    historyConfidencePercent = 62
+  } else if (requestedMode === 'patch') {
+    historyConfidence = 'medium'
+    historyConfidencePercent = 52
+  } else if (commonPaths.length > 0) {
+    historyConfidence = 'low'
+    historyConfidencePercent = 38
+  }
+
+  return {
+    requestedMode,
+    resolvedMode,
+    fromFileCount: fromPaths.length,
+    toFileCount: toPaths.length,
+    commonPathCount: commonPaths.length,
+    unchangedCommonPathCount,
+    modifiedCommonPathCount,
+    fromOnlyPathCount,
+    toOnlyPathCount,
+    overlapOfSmallerSnapshot,
+    removalsReliable: resolvedMode === 'full',
+    ignoredPotentialRemovals: resolvedMode === 'patch' ? fromOnlyPathCount : 0,
+    historyConfidence,
+    historyConfidencePercent,
+    reason,
+  }
 }
 
-export function compareSnapshots(from: Snapshot, to: Snapshot): VersionTransition {
+function categoryRanking(changes: FileChange[]): Array<[ChangeCategory, number]> {
+  const counts = new Map<ChangeCategory, number>()
+  for (const change of changes) counts.set(change.category, (counts.get(change.category) ?? 0) + 1)
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+}
+
+function searchText(snapshot: Snapshot, paths: string[]): string {
+  return paths
+    .map((path) => snapshot.files[path]?.content ?? '')
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+}
+
+function detectFeatureTags(changes: FileChange[], to: Snapshot): FeatureTag[] {
+  const paths = changes.filter((change) => change.status !== 'removed').map((change) => change.path)
+  const joinedPaths = paths.join('\n').toLowerCase()
+  const content = searchText(to, paths)
+  const has = (pattern: RegExp) => pattern.test(joinedPaths) || pattern.test(content)
+  const tags: FeatureTag[] = []
+
+  if (has(/lk\.alex-educator|personal[_-]?account|личн(?:ый|ого) кабинет/)) tags.push('student_cabinet')
+  if (has(/auth\/verify|issue_code|verify_code|lk_auth_codes|шестизначн|одноразов/)) tags.push('email_code_auth')
+  if (has(/password_hash|password_verify|войти по паролю|create password|создать пароль/)) tags.push('password_auth')
+  if (has(/auth\/(forgot|reset)|purpose[^\n]{0,20}reset|смены пароля/)) tags.push('password_reset')
+  if (has(/csrf|session_set_cookie_params|httponly|samesite|require_user/)) tags.push('session_security')
+  if (has(/contract\/index|contract_clients|contract_status|открыть договор/)) tags.push('contract_access')
+  if (has(/schedule\/index|data-calendar|calendar-controls|расписание/)) tags.push('schedule_calendar')
+  if (has(/payments\/index|оплаты|чеки/)) tags.push('payments_section')
+  if (has(/homework\/index|домашн(?:ее|яя) задани/)) tags.push('homework_section')
+  if (has(/settings\/index|профиль|изменить пароль|создать пароль/)) tags.push('settings_profile')
+  if (has(/\.sql(?:\n|$)|create table|foreign key|lk_users|lk_auth_codes/)) tags.push('database_schema')
+  if (has(/includes\/layout|page_header|page_footer/)) tags.push('shared_layout')
+  if (has(/data-menu|sidebar[^\n]{0,40}open|@media/)) tags.push('mobile_navigation')
+  if (has(/smtp_send|stream_socket_client|отправить код|отправк[аи] кода/)) tags.push('smtp_delivery')
+  if (has(/install|readme-setup|php 8\.|phpmyadmin|инструкц/)) tags.push('installation_docs')
+
+  return [...new Set(tags)]
+}
+
+function genericTitle(featureTags: FeatureTag[], scope: ScopeAnalysis): string {
+  if (featureTags.includes('student_cabinet')) return 'Добавлен MVP личного кабинета'
+  if (scope.resolvedMode === 'patch') return 'Добавлен отдельный модуль проекта'
+  return 'Обновлена версия проекта'
+}
+
+function inferTransitionCommit(id: string, changes: FileChange[], from: Snapshot, to: Snapshot, scope: ScopeAnalysis): InferredCommit[] {
+  if (!changes.length) return []
+  const ranking = categoryRanking(changes)
+  const category = ranking[0]?.[0] ?? 'other'
+  const categories = ranking.map(([item]) => item)
+  const classificationConfidence = Math.round(55 + ((ranking[0]?.[1] ?? 0) / Math.max(changes.length, 1)) * 40)
+  const featureTags = detectFeatureTags(changes, to)
+  const stats = summarizeStats(changes)
+  const semantic = analyzeSemanticChanges(changes, from, to)
+
+  return [{
+    id: `${id}-${stableId(changes.map((change) => `${change.status}:${change.path}`).join('|'))}`,
+    category,
+    categories,
+    featureTags,
+    title: genericTitle(featureTags, scope),
+    description: `${stats.filesAdded} added, ${stats.filesModified} modified, ${stats.filesRemoved} removed. ${CATEGORY_LABELS[category]}.`,
+    confidence: scope.historyConfidencePercent,
+    classificationConfidence,
+    changes: [...changes].sort((left, right) => left.path.localeCompare(right.path)),
+    semantic,
+  }]
+}
+
+export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode = 'auto'): VersionTransition {
+  const scope = resolveScope(from, to, requestedMode)
   const paths = new Set([...Object.keys(from.files), ...Object.keys(to.files)])
   const changes: FileChange[] = []
 
@@ -206,7 +283,7 @@ export function compareSnapshots(from: Snapshot, to: Snapshot): VersionTransitio
     const after = to.files[path]
 
     if (!before && after) changes.push(makeChange(path, 'added', undefined, after))
-    else if (before && !after) changes.push(makeChange(path, 'removed', before, undefined))
+    else if (before && !after && scope.removalsReliable) changes.push(makeChange(path, 'removed', before, undefined))
     else if (before && after && before.hash !== after.hash) changes.push(makeChange(path, 'modified', before, after))
   }
 
@@ -215,74 +292,87 @@ export function compareSnapshots(from: Snapshot, to: Snapshot): VersionTransitio
     id,
     from,
     to,
+    scope,
     stats: summarizeStats(changes),
     changes,
-    commits: inferCommits(id, changes),
+    commits: inferTransitionCommit(id, changes, from, to, scope),
   }
 }
 
-export function analyzeSnapshots(inputSnapshots: Snapshot[]): AnalysisReport {
+export function analyzeSnapshots(
+  inputSnapshots: Snapshot[],
+  options: { comparisonMode?: ComparisonMode } = {},
+): AnalysisReport {
+  const requestedMode = options.comparisonMode ?? 'auto'
   const snapshots = [...inputSnapshots].sort((left, right) => {
     const byDate = new Date(left.capturedAt).getTime() - new Date(right.capturedAt).getTime()
     return byDate || left.label.localeCompare(right.label)
   })
 
-  const transitions = snapshots.slice(1).map((snapshot, index) => compareSnapshots(snapshots[index], snapshot))
-  const transitionStats = transitions.map((transition) => transition.stats)
-
-  const totals = transitionStats.reduce<AnalysisReport['totals']>((result, stats) => ({
-    filesAdded: result.filesAdded + stats.filesAdded,
-    filesModified: result.filesModified + stats.filesModified,
-    filesRemoved: result.filesRemoved + stats.filesRemoved,
-    linesAdded: result.linesAdded + stats.linesAdded,
-    linesRemoved: result.linesRemoved + stats.linesRemoved,
-    inferredCommits: result.inferredCommits,
+  const transitions = snapshots.slice(1).map((snapshot, index) => compareSnapshots(snapshots[index], snapshot, requestedMode))
+  const totals = transitions.reduce<AnalysisReport['totals']>((result, transition) => ({
+    filesAdded: result.filesAdded + transition.stats.filesAdded,
+    filesModified: result.filesModified + transition.stats.filesModified,
+    filesRemoved: result.filesRemoved + transition.stats.filesRemoved,
+    linesAdded: result.linesAdded + transition.stats.linesAdded,
+    linesRemoved: result.linesRemoved + transition.stats.linesRemoved,
+    inferredCommits: result.inferredCommits + transition.commits.length,
     analyzedFiles: result.analyzedFiles,
+    ignoredPotentialRemovals: result.ignoredPotentialRemovals + transition.scope.ignoredPotentialRemovals,
+    semanticFacts: result.semanticFacts + transition.commits.reduce((sum, commit) => sum + commit.semantic.facts.length, 0),
+    semanticCoveragePercent: 0,
   }), {
     filesAdded: 0,
     filesModified: 0,
     filesRemoved: 0,
     linesAdded: 0,
     linesRemoved: 0,
-    inferredCommits: transitions.reduce((sum, transition) => sum + transition.commits.length, 0),
+    inferredCommits: 0,
     analyzedFiles: snapshots.reduce((sum, snapshot) => sum + Object.keys(snapshot.files).length, 0),
+    ignoredPotentialRemovals: 0,
+    semanticFacts: 0,
+    semanticCoveragePercent: 0,
   })
 
-  return {
-    generatedAt: new Date().toISOString(),
-    snapshots,
-    transitions,
-    totals,
-  }
+  const semanticCommits = transitions.flatMap((transition) => transition.commits)
+  const semanticCandidates = semanticCommits.reduce((sum, commit) => sum + commit.semantic.candidateTextFiles, 0)
+  const semanticRepresented = semanticCommits.reduce((sum, commit) => sum + commit.semantic.representedTextFiles, 0)
+  totals.semanticCoveragePercent = semanticCandidates === 0 ? 100 : Math.round((semanticRepresented / semanticCandidates) * 100)
+
+  return { generatedAt: new Date().toISOString(), requestedMode, snapshots, transitions, totals }
 }
 
 export function buildChangelog(report: AnalysisReport): string {
   const lines: string[] = [
-    '# Reconstructed changelog',
+    '# Reconstructed change sets',
     '',
-    '> Generated by Git Time Machine. Commit grouping and titles are inferred from file changes and should be reviewed before use.',
+    '> Generated by Git Time Machine. Each archive transition is one reconstructed change set, not a proven original Git commit.',
     '',
   ]
 
   for (const transition of [...report.transitions].reverse()) {
     lines.push(`## ${transition.to.label} — ${formatDate(transition.to.capturedAt)}`, '')
-
+    lines.push(`- Comparison mode: ${transition.scope.resolvedMode}`)
+    lines.push(`- Matching paths: ${transition.scope.commonPathCount}`)
+    if (!transition.scope.removalsReliable) lines.push(`- ${transition.scope.ignoredPotentialRemovals} absent previous paths were not treated as deletions.`)
     if (!transition.changes.length) {
-      lines.push('- No file changes detected.', '')
+      lines.push('- No supported file changes detected.', '')
       continue
     }
-
-    for (const commit of transition.commits) {
-      lines.push(`### ${commit.title}`, '')
-      lines.push(`- Confidence: ${commit.confidence}%`)
-      lines.push(`- ${commit.description}`)
-      for (const change of commit.changes.slice(0, 12)) {
-        const marker = change.status === 'added' ? 'A' : change.status === 'removed' ? 'D' : 'M'
-        lines.push(`  - \`${marker}\` \`${change.path}\``)
-      }
-      if (commit.changes.length > 12) lines.push(`  - …and ${commit.changes.length - 12} more files`)
-      lines.push('')
+    const commit = transition.commits[0]
+    lines.push(`- ${commit.title}`)
+    lines.push(`- History confidence: ${transition.scope.historyConfidence} (${transition.scope.historyConfidencePercent}%)`)
+    lines.push(`- Category confidence: ${commit.classificationConfidence}%`)
+    lines.push(`- Semantic coverage: ${commit.semantic.coveragePercent}% (${commit.semantic.facts.length} facts)`)
+    for (const fact of commit.semantic.facts.filter((item) => item.level === 'functional').slice(0, 16)) {
+      lines.push(`  - ${fact.operation.toUpperCase()} ${fact.code}: ${fact.subject} (${fact.confidence}%)`)
     }
+    for (const change of commit.changes.slice(0, 24)) {
+      const marker = change.status === 'added' ? 'A' : change.status === 'removed' ? 'D' : 'M'
+      lines.push(`  - \`${marker}\` \`${change.path}\``)
+    }
+    if (commit.changes.length > 24) lines.push(`  - …and ${commit.changes.length - 24} more files`)
+    lines.push('')
   }
 
   return lines.join('\n')
@@ -293,16 +383,18 @@ export function buildMarkdownReport(report: AnalysisReport): string {
     '# Git Time Machine analysis',
     '',
     `Generated: ${formatDateTime(report.generatedAt)}`,
+    `Requested comparison mode: ${report.requestedMode}`,
     '',
     '## Summary',
     '',
     `- Snapshots: ${report.snapshots.length}`,
-    `- Inferred commits: ${report.totals.inferredCommits}`,
+    `- Reconstructed change sets: ${report.totals.inferredCommits}`,
     `- Files added: ${report.totals.filesAdded}`,
     `- Files modified: ${report.totals.filesModified}`,
-    `- Files removed: ${report.totals.filesRemoved}`,
-    `- Lines added: ${report.totals.linesAdded}`,
-    `- Lines removed: ${report.totals.linesRemoved}`,
+    `- Confirmed files removed: ${report.totals.filesRemoved}`,
+    `- Potential removals intentionally ignored: ${report.totals.ignoredPotentialRemovals}`,
+    `- Semantic facts: ${report.totals.semanticFacts}`,
+    `- Semantic text-file coverage: ${report.totals.semanticCoveragePercent}%`,
     '',
     '## Snapshot inventory',
     '',
@@ -329,10 +421,6 @@ export function formatDate(value: string): string {
 
 export function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
   }).format(new Date(value))
 }

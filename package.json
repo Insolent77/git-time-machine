@@ -1,9 +1,9 @@
 {
   "name": "git-time-machine",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.6.0",
   "type": "module",
-  "description": "Reconstruct a plausible development history from ZIP, RAR, 7Z, TAR and other project archives — fully in the browser.",
+  "description": "Reconstruct scope-aware, functional development history from project archives — fully in the browser.",
   "scripts": {
     "dev": "vite",
     "prepare:libarchive": "node scripts/copy-libarchive-assets.mjs",

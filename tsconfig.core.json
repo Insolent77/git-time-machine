@@ -11,6 +11,7 @@
   "include": [
     "src/lib/types.ts",
     "src/lib/analyzer.ts",
+    "src/lib/semantic.ts",
     "src/lib/demo.ts"
   ]
 }
