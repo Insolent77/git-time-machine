@@ -19,7 +19,7 @@ const PROJECT_ROOT_SEGMENTS = new Set([
 ])
 
 const IGNORED_SEGMENTS = new Set([
-  '.git', '.idea', '.vscode', 'node_modules', 'vendor', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '__pycache__',
+  '.git', '.idea', '.vscode', '.codebase-memory', '.continue', '.cursor', 'node_modules', 'vendor', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '__pycache__',
 ])
 
 const TEXT_EXTENSIONS = new Set([
@@ -310,6 +310,8 @@ function analysisRoleForPath(path: string, browserRoots: string[]): FileAnalysis
   }
   if (isThirdPartyOrGenerated(path)) return 'generated'
   if (/\/(?:compiled|generated|cache)(?:\/|$)/i.test(normalized)) return 'generated'
+  if (/(?:^|\/)uploads?\//i.test(normalized) && !/\.htaccess$/i.test(normalized)) return 'generated'
+  if (/(?:\.bak|\.old|\.orig|\.tmp|~)$/i.test(normalized) || /(?:^|\/)\.previous-/i.test(normalized)) return 'generated'
   return 'source'
 }
 

@@ -18,7 +18,7 @@ import {
   archiveErrorHint,
   buildCommitDossier,
   buildDetailedReport,
-  categoryLabel,
+  featureAreaLabel,
   comparisonModeLabel,
   formatLocalizedDate,
   historyConfidenceLabel,
@@ -434,7 +434,7 @@ function App() {
                     <details className="commit-entry" key={id} open={index === 0}>
                       <summary>
                         <span>LOCAL-{String(serial).padStart(4, '0')}</span>
-                        <strong>{categoryLabel(language, commit.category)}</strong>
+                        <strong>{featureAreaLabel(language, commit.featureArea)}</strong>
                         <small>{formatLocalizedDate(transition.to.capturedAt, language)} · {historyConfidenceLabel(language, transition.scope.historyConfidence)} / {commit.confidence}%</small>
                         <i>＋</i>
                       </summary>

@@ -10,7 +10,7 @@ import type {
   SnapshotFile,
 } from './types'
 
-const MAX_FACTS = 160
+const DEFAULT_MAX_FACTS = 160
 const MAX_DETAILS = 12
 const MAX_EXCERPT = 180
 
@@ -740,7 +740,12 @@ function mergeFacts(inputFacts: SemanticFact[]): SemanticFact[] {
   })
 }
 
-export function analyzeSemanticChanges(changes: FileChange[], from: Snapshot, to: Snapshot): SemanticAnalysis {
+export function analyzeSemanticChanges(
+  changes: FileChange[],
+  from: Snapshot,
+  to: Snapshot,
+  options: { maxFacts?: number } = {},
+): SemanticAnalysis {
   const facts: SemanticFact[] = []
   const languages = new Set<string>()
   let candidateTextFiles = 0
@@ -769,8 +774,9 @@ export function analyzeSemanticChanges(changes: FileChange[], from: Snapshot, to
   }
 
   const merged = mergeFacts(facts)
-  const truncatedFacts = Math.max(0, merged.length - MAX_FACTS)
-  const selectedFacts = merged.slice(0, MAX_FACTS)
+  const maxFacts = Math.max(1, options.maxFacts ?? DEFAULT_MAX_FACTS)
+  const truncatedFacts = Math.max(0, merged.length - maxFacts)
+  const selectedFacts = merged.slice(0, maxFacts)
   const coveragePercent = candidateTextFiles === 0 ? 100 : Math.round((representedTextFiles / candidateTextFiles) * 100)
   const warnings: string[] = []
   if (fallbackTextFiles) warnings.push(`${fallbackTextFiles} text files required generic fallback descriptions.`)

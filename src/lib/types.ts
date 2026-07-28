@@ -22,6 +22,30 @@ export type ChangeCategory =
   | 'assets'
   | 'other'
 
+export type FeatureAreaCode =
+  | 'foundation'
+  | 'public_site'
+  | 'lead_requests'
+  | 'contracts'
+  | 'reviews'
+  | 'admin_core'
+  | 'students'
+  | 'authentication'
+  | 'personal_account'
+  | 'schedule'
+  | 'homework'
+  | 'payments'
+  | 'communications'
+  | 'settings'
+  | 'database'
+  | 'infrastructure'
+  | 'quality'
+  | 'documentation'
+  | 'assets'
+  | 'other'
+
+export type FeatureGroupCode = 'product' | 'access' | 'platform' | 'quality'
+
 export type FeatureTag =
   | 'student_cabinet'
   | 'email_code_auth'
@@ -214,6 +238,40 @@ export interface ScopeAnalysis {
   sharedIdentityTokens: string[]
   sharedContentHashCount: number
   relationshipReason: 'common_paths' | 'shared_identity' | 'shared_content' | 'manual_override' | 'no_project_evidence'
+  pathAlignmentApplied: boolean
+  fromPathPrefix: string
+  toPathPrefix: string
+  pathAlignmentConfidencePercent: number
+}
+
+export interface FeatureCluster {
+  area: FeatureAreaCode
+  group: FeatureGroupCode
+  confidence: number
+  sequence: number
+  signals: string[]
+  relatedAreas: FeatureAreaCode[]
+  primaryFileCount: number
+  supportingFileCount: number
+  inferredSplit: boolean
+}
+
+export interface FeatureTreeNode {
+  id: string
+  group: FeatureGroupCode
+  title: string
+  commitIds: string[]
+  fileCount: number
+  semanticFactCount: number
+  children: Array<{
+    id: string
+    area: FeatureAreaCode
+    title: string
+    commitId: string
+    confidence: number
+    fileCount: number
+    semanticFactCount: number
+  }>
 }
 
 export interface InferredCommit {
@@ -221,6 +279,9 @@ export interface InferredCommit {
   category: ChangeCategory
   categories: ChangeCategory[]
   featureTags: FeatureTag[]
+  featureArea: FeatureAreaCode
+  cluster: FeatureCluster
+  supportingFiles: string[]
   title: string
   description: string
   confidence: number
@@ -237,6 +298,7 @@ export interface VersionTransition {
   stats: ChangeStats
   changes: FileChange[]
   commits: InferredCommit[]
+  featureTree: FeatureTreeNode[]
 }
 
 export interface AnalysisReport {

@@ -6,11 +6,11 @@ const report = analyzeSnapshots(makeDemoSnapshots())
 
 assert.equal(report.snapshots.length, 3)
 assert.equal(report.transitions.length, 2)
-assert.equal(report.totals.inferredCommits, 2)
+assert.ok(report.totals.inferredCommits >= 6)
 assert.ok(report.totals.filesAdded > 0)
 assert.ok(report.totals.semanticFacts > 0)
 assert.equal(report.totals.semanticCoveragePercent, 100)
-assert.ok(report.transitions[0].commits[0].semantic.facts.some((fact) => fact.code === 'component'))
+assert.ok(report.transitions[0].commits.flatMap((commit) => commit.semantic.facts).some((fact) => fact.code === 'component'))
 assert.equal(categorizePath('src/auth/session.ts'), 'auth')
 assert.equal(categorizePath('src/db/migrations/001.sql'), 'database')
 assert.match(buildChangelog(report), /Reconstructed change sets/)
@@ -36,10 +36,42 @@ assert.equal(patchTransition.scope.resolvedMode, 'patch')
 assert.equal(patchTransition.scope.commonPathCount, 0)
 assert.equal(patchTransition.stats.filesRemoved, 0)
 assert.equal(patchTransition.scope.ignoredPotentialRemovals, 3)
-assert.equal(patchTransition.commits.length, 1)
-assert.ok(patchTransition.commits[0].featureTags.includes('email_code_auth'))
-assert.ok(patchTransition.commits[0].featureTags.includes('schedule_calendar'))
+assert.equal(patchTransition.commits.length, 2)
+assert.deepEqual(patchTransition.commits.map((commit) => commit.featureArea), ['authentication', 'schedule'])
+assert.ok(patchTransition.commits.find((commit) => commit.featureArea === 'authentication').featureTags.includes('email_code_auth'))
+assert.ok(patchTransition.commits.find((commit) => commit.featureArea === 'schedule').featureTags.includes('schedule_calendar'))
 
+
+const prefixedWorkspace = {
+  id: 'prefixed-workspace', label: 'Workspace export', sourceName: 'project.rar', capturedAt: '2026-07-02T13:00:00.000Z', capturePrecision: 'date', totalBytes: 5, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['aligned-project'], sourceFiles: 5, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 1, warnings: [] },
+  files: {
+    'backup/old.zip': { path: 'backup/old.zip', size: 1, hash: 'backup', kind: 'binary', analysisRole: 'source' },
+    'www/app/index.php': { path: 'www/app/index.php', size: 1, hash: 'index-old', kind: 'text', content: '<?php echo "old";' },
+    'www/app/auth/login.php': { path: 'www/app/auth/login.php', size: 1, hash: 'login-old', kind: 'text', content: '<?php function login() {}' },
+    'www/app/schedule.php': { path: 'www/app/schedule.php', size: 1, hash: 'schedule-same', kind: 'text', content: '<?php function schedule() {}' },
+    'www/app/style.css': { path: 'www/app/style.css', size: 1, hash: 'style-same', kind: 'text', content: 'body{}' },
+  },
+}
+const directProject = {
+  id: 'direct-project', label: 'Project root', sourceName: 'www.7z', capturedAt: '2026-07-02T14:00:00.000Z', capturePrecision: 'date', totalBytes: 5, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['aligned-project'], sourceFiles: 5, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'app/index.php': { path: 'app/index.php', size: 1, hash: 'index-new', kind: 'text', content: '<?php echo "new";' },
+    'app/auth/login.php': { path: 'app/auth/login.php', size: 1, hash: 'login-new', kind: 'text', content: '<?php function login() { password_verify("a", "b"); }' },
+    'app/schedule.php': { path: 'app/schedule.php', size: 1, hash: 'schedule-same', kind: 'text', content: '<?php function schedule() {}' },
+    'app/style.css': { path: 'app/style.css', size: 1, hash: 'style-same', kind: 'text', content: 'body{}' },
+    'app/reviews.php': { path: 'app/reviews.php', size: 1, hash: 'review-new', kind: 'text', content: '<?php function saveReview() {}' },
+  },
+}
+const alignedTransition = compareSnapshots(prefixedWorkspace, directProject, 'auto')
+assert.equal(alignedTransition.scope.pathAlignmentApplied, true)
+assert.equal(alignedTransition.scope.fromPathPrefix, 'www/')
+assert.equal(alignedTransition.scope.toPathPrefix, '')
+assert.equal(alignedTransition.scope.commonPathCount, 4)
+assert.equal(alignedTransition.stats.filesModified, 2)
+assert.equal(alignedTransition.stats.filesAdded, 1)
+assert.ok(!alignedTransition.changes.some((change) => change.path.startsWith('backup/')))
 
 const semanticOld = {
   id: 'semantic-old', label: 'Semantic old', sourceName: 'old.zip', capturedAt: '2026-07-03T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
@@ -58,14 +90,14 @@ const semanticNew = {
   },
 }
 const semanticTransition = compareSnapshots(semanticOld, semanticNew, 'full')
-const semanticFacts = semanticTransition.commits[0].semantic.facts
+const semanticFacts = semanticTransition.commits.flatMap((commit) => commit.semantic.facts)
 assert.ok(semanticFacts.some((fact) => fact.code === 'function' && fact.operation === 'added' && fact.subject === 'verifyOtp'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'code_logic' && fact.operation === 'modified' && fact.subject === 'login'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'route' && fact.subject === 'POST /login'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'api_request' && fact.subject === 'POST /api/session'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'database_table' && fact.subject === 'auth_codes'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'dependency' && fact.subject === 'zod'))
-assert.equal(semanticTransition.commits[0].semantic.coveragePercent, 100)
+assert.ok(semanticTransition.commits.every((commit) => commit.semantic.coveragePercent === 100))
 
 const forcedFull = compareSnapshots(oldSnapshot, moduleSnapshot, 'full')
 assert.equal(forcedFull.scope.resolvedMode, 'full')
@@ -91,7 +123,7 @@ assert.equal(unrelatedTransition.changes.length, 0)
 const forcedUnrelated = compareSnapshots(unrelatedOne, unrelatedTwo, 'patch')
 assert.equal(forcedUnrelated.scope.comparisonAllowed, true)
 assert.equal(forcedUnrelated.scope.relationshipReason, 'manual_override')
-assert.equal(forcedUnrelated.commits.length, 1)
+assert.ok(forcedUnrelated.commits.length >= 1)
 
 const browserSnapshot = {
   id: 'browser', label: 'Saved admin pages', sourceName: 'Desktop.rar', capturedAt: '2026-07-07T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
@@ -103,14 +135,47 @@ const browserSnapshot = {
 }
 const browserForced = compareSnapshots(unrelatedOne, browserSnapshot, 'patch')
 assert.equal(browserForced.changes.length, 1)
-assert.ok(browserForced.commits[0].semantic.facts.some((fact) => fact.code === 'browser_snapshot'))
-assert.ok(!browserForced.commits[0].semantic.facts.some((fact) => fact.subject === 'a'))
+assert.ok(browserForced.commits.flatMap((commit) => commit.semantic.facts).some((fact) => fact.code === 'browser_snapshot'))
+assert.ok(!browserForced.commits.flatMap((commit) => commit.semantic.facts).some((fact) => fact.subject === 'a'))
 
 const mixedSequenceReport = analyzeSnapshots([unrelatedOne, browserSnapshot, unrelatedTwo], { comparisonMode: 'auto' })
 assert.equal(mixedSequenceReport.transitions.length, 2)
 assert.ok(mixedSequenceReport.transitions.every((transition) => transition.scope.comparisonAllowed === false))
 assert.equal(mixedSequenceReport.totals.inferredCommits, 0)
 assert.equal(mixedSequenceReport.totals.semanticFacts, 0)
+
+const featureOld = {
+  id: 'feature-old', label: 'Base site', sourceName: 'base.zip', capturedAt: '2026-07-08T12:00:00.000Z', capturePrecision: 'date', totalBytes: 1, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['alex-educator'], sourceFiles: 1, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: { 'alex-educator.com/index.html': { path: 'alex-educator.com/index.html', size: 5, hash: 'base-index', kind: 'text', content: '<main>Old</main>' } },
+}
+const featureNew = {
+  id: 'feature-new', label: 'Product modules', sourceName: 'www.7z', capturedAt: '2026-07-09T12:00:00.000Z', capturePrecision: 'date', totalBytes: 10, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['alex-educator'], sourceFiles: 10, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'alex-educator.com/index.html': { path: 'alex-educator.com/index.html', size: 8, hash: 'new-index', kind: 'text', content: '<main>New landing</main>' },
+    'alex-educator.com/api/submit-lead.php': { path: 'alex-educator.com/api/submit-lead.php', size: 8, hash: 'lead', kind: 'text', content: '<?php function submitLead() { return json_encode([]); }' },
+    'alex-educator.com/contract/index.php': { path: 'alex-educator.com/contract/index.php', size: 8, hash: 'contract', kind: 'text', content: '<?php function renderContract() {}' },
+    'alex-educator.com/database/contracts.sql': { path: 'alex-educator.com/database/contracts.sql', size: 8, hash: 'contract-db', kind: 'text', content: 'CREATE TABLE contract_clients (id INT);' },
+    'alex-educator.com/admin/reviews.php': { path: 'alex-educator.com/admin/reviews.php', size: 8, hash: 'review', kind: 'text', content: '<?php function saveReview() {} function deleteReview() {}' },
+    'lk.alex-educator.com/auth/login.php': { path: 'lk.alex-educator.com/auth/login.php', size: 8, hash: 'auth', kind: 'text', content: '<?php password_verify($a,$b); csrf_token();' },
+    'lk.alex-educator.com/schedule/index.php': { path: 'lk.alex-educator.com/schedule/index.php', size: 8, hash: 'schedule', kind: 'text', content: '<div data-calendar></div>' },
+    'lk.alex-educator.com/homework/index.php': { path: 'lk.alex-educator.com/homework/index.php', size: 8, hash: 'homework', kind: 'text', content: '<?php function submitHomework() {}' },
+    'alex-educator.com/database/homework.sql': { path: 'alex-educator.com/database/homework.sql', size: 8, hash: 'homework-db', kind: 'text', content: 'CREATE TABLE homework_assignments (id INT);' },
+    'README.md': { path: 'README.md', size: 8, hash: 'readme', kind: 'text', content: '# Installation' },
+  },
+}
+const featureTransition = compareSnapshots(featureOld, featureNew, 'auto')
+const featureAreas = featureTransition.commits.map((commit) => commit.featureArea)
+assert.ok(featureAreas.includes('lead_requests'))
+assert.ok(featureAreas.includes('contracts'))
+assert.ok(featureAreas.includes('reviews'))
+assert.ok(featureAreas.includes('authentication'))
+assert.ok(featureAreas.includes('schedule'))
+assert.ok(featureAreas.includes('homework'))
+assert.ok(featureTransition.featureTree.length >= 2)
+assert.equal(new Set(featureTransition.commits.flatMap((commit) => commit.changes.map((change) => change.path))).size, featureTransition.changes.length)
+assert.equal(featureTransition.commits.flatMap((commit) => commit.changes).length, featureTransition.changes.length)
 
 console.log('Core smoke test passed:', {
   transitions: report.transitions.length,

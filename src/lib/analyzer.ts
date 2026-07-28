@@ -3,32 +3,15 @@ import type {
   ChangeCategory,
   ChangeStats,
   ComparisonMode,
-  FeatureTag,
   FileChange,
   HistoryConfidence,
-  InferredCommit,
   ResolvedComparisonMode,
   ScopeAnalysis,
   Snapshot,
   SnapshotFile,
   VersionTransition,
 } from './types'
-import { analyzeSemanticChanges } from './semantic.js'
-
-const CATEGORY_LABELS: Record<ChangeCategory, string> = {
-  auth: 'Авторизация и доступ',
-  database: 'База данных',
-  admin: 'Административная панель',
-  api: 'API и серверная логика',
-  ui: 'Пользовательский интерфейс',
-  styles: 'Стили и адаптивность',
-  tests: 'Тесты и контроль качества',
-  docs: 'Документация',
-  config: 'Конфигурация и инфраструктура',
-  deps: 'Зависимости',
-  assets: 'Медиа и ресурсы',
-  other: 'Прочие изменения',
-}
+import { inferFeatureCommits } from './feature-clustering.js'
 
 const CATEGORY_PATTERNS: Array<[ChangeCategory, RegExp[]]> = [
   ['auth', [/auth/i, /login/i, /logout/i, /password/i, /session/i, /token/i, /permission/i, /role/i, /доступ/i]],
@@ -140,6 +123,124 @@ function comparablePaths(snapshot: Snapshot): string[] {
     .map((file) => file.path)
 }
 
+interface SnapshotAlignment {
+  from: Snapshot
+  to: Snapshot
+  applied: boolean
+  fromPrefix: string
+  toPrefix: string
+  confidencePercent: number
+}
+
+interface PrefixCandidate {
+  prefix: string
+  count: number
+  coverage: number
+}
+
+const ROOT_ALIGNMENT_STOP_SEGMENTS = new Set([
+  'src', 'app', 'public', 'assets', 'docs', 'test', 'tests', 'config', 'scripts', 'api', 'server', 'client',
+  'admin', 'auth', 'database', 'includes', 'uploads', 'vendor', 'node_modules',
+])
+
+function prefixCandidates(paths: string[]): PrefixCandidate[] {
+  const counts = new Map<string, number>()
+  const total = Math.max(paths.length, 1)
+  for (const path of paths) {
+    const segments = path.split('/').filter(Boolean)
+    for (let depth = 1; depth <= Math.min(2, segments.length - 1); depth += 1) {
+      const prefix = `${segments.slice(0, depth).join('/')}/`
+      const first = segments[0].toLowerCase()
+      if (depth === 1 && ROOT_ALIGNMENT_STOP_SEGMENTS.has(first)) continue
+      counts.set(prefix, (counts.get(prefix) ?? 0) + 1)
+    }
+  }
+
+  const minimumCount = Math.max(3, Math.ceil(total * 0.12))
+  const derived = [...counts.entries()]
+    .filter(([, count]) => count >= minimumCount)
+    .map(([prefix, count]) => ({ prefix, count, coverage: count / total }))
+    .sort((left, right) => right.count - left.count || left.prefix.split('/').length - right.prefix.split('/').length)
+    .slice(0, 16)
+
+  return [{ prefix: '', count: paths.length, coverage: 1 }, ...derived]
+}
+
+function pathsUnderPrefix(paths: string[], prefix: string): string[] {
+  if (!prefix) return paths
+  return paths.filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length))
+}
+
+function alignedSnapshot(snapshot: Snapshot, prefix: string): Snapshot {
+  if (!prefix) return snapshot
+  const files: Snapshot['files'] = {}
+  let totalBytes = 0
+  for (const file of Object.values(snapshot.files)) {
+    if (file.analysisRole && file.analysisRole !== 'source' && file.analysisRole !== 'artifact') continue
+    if (!file.path.startsWith(prefix)) continue
+    const path = file.path.slice(prefix.length)
+    if (!path || files[path]) continue
+    files[path] = { ...file, path }
+    totalBytes += file.size
+  }
+  return { ...snapshot, files, totalBytes }
+}
+
+function alignSnapshotRoots(from: Snapshot, to: Snapshot): SnapshotAlignment {
+  const fromPaths = comparablePaths(from)
+  const toPaths = comparablePaths(to)
+  const rawCommon = fromPaths.filter((path) => path in to.files).length
+  let best = {
+    fromPrefix: '',
+    toPrefix: '',
+    common: rawCommon,
+    overlap: rawCommon / Math.max(Math.min(fromPaths.length, toPaths.length), 1),
+    minCoverage: 1,
+    score: rawCommon * 100,
+  }
+
+  for (const fromCandidate of prefixCandidates(fromPaths)) {
+    const normalizedFrom = pathsUnderPrefix(fromPaths, fromCandidate.prefix)
+    if (!normalizedFrom.length) continue
+    const fromSet = new Set(normalizedFrom)
+    for (const toCandidate of prefixCandidates(toPaths)) {
+      if (!fromCandidate.prefix && !toCandidate.prefix) continue
+      const normalizedTo = pathsUnderPrefix(toPaths, toCandidate.prefix)
+      if (!normalizedTo.length) continue
+      const common = normalizedTo.filter((path) => fromSet.has(path)).length
+      const smaller = Math.max(Math.min(normalizedFrom.length, normalizedTo.length), 1)
+      const overlap = common / smaller
+      const minCoverage = Math.min(fromCandidate.coverage, toCandidate.coverage)
+      const depthPenalty = (fromCandidate.prefix.split('/').filter(Boolean).length + toCandidate.prefix.split('/').filter(Boolean).length) * 2
+      const score = common * 100 + overlap * 35 + minCoverage * 20 - depthPenalty
+      if (score > best.score) {
+        best = { fromPrefix: fromCandidate.prefix, toPrefix: toCandidate.prefix, common, overlap, minCoverage, score }
+      }
+    }
+  }
+
+  const improvement = best.common - rawCommon
+  const applied = (best.fromPrefix || best.toPrefix)
+    && best.common >= 3
+    && best.overlap >= 0.35
+    && best.minCoverage >= 0.4
+    && improvement >= Math.max(2, Math.ceil(rawCommon * 0.2))
+
+  if (!applied) {
+    return { from, to, applied: false, fromPrefix: '', toPrefix: '', confidencePercent: 0 }
+  }
+
+  const confidencePercent = Math.max(60, Math.min(99, Math.round(55 + best.overlap * 30 + best.minCoverage * 14)))
+  return {
+    from: alignedSnapshot(from, best.fromPrefix),
+    to: alignedSnapshot(to, best.toPrefix),
+    applied: true,
+    fromPrefix: best.fromPrefix,
+    toPrefix: best.toPrefix,
+    confidencePercent,
+  }
+}
+
 function fallbackIdentityTokens(snapshot: Snapshot): string[] {
   if (snapshot.profile?.identityTokens?.length) return snapshot.profile.identityTokens
   const tokens = new Set<string>()
@@ -159,7 +260,7 @@ function sharedContentHashes(from: Snapshot, to: Snapshot): number {
     .map((file) => file.hash)).size
 }
 
-function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode): ScopeAnalysis {
+function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode, alignment: SnapshotAlignment): ScopeAnalysis {
   const fromPaths = comparablePaths(from)
   const toPaths = comparablePaths(to)
   const commonPaths = fromPaths.filter((path) => path in to.files)
@@ -261,81 +362,18 @@ function resolveScope(from: Snapshot, to: Snapshot, requestedMode: ComparisonMod
     sharedIdentityTokens,
     sharedContentHashCount,
     relationshipReason,
+    pathAlignmentApplied: alignment.applied,
+    fromPathPrefix: alignment.fromPrefix,
+    toPathPrefix: alignment.toPrefix,
+    pathAlignmentConfidencePercent: alignment.confidencePercent,
   }
 }
 
-function categoryRanking(changes: FileChange[]): Array<[ChangeCategory, number]> {
-  const counts = new Map<ChangeCategory, number>()
-  for (const change of changes) counts.set(change.category, (counts.get(change.category) ?? 0) + 1)
-  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-}
-
-function searchText(snapshot: Snapshot, paths: string[]): string {
-  return paths
-    .map((path) => snapshot.files[path]?.content ?? '')
-    .filter(Boolean)
-    .join('\n')
-    .toLowerCase()
-}
-
-function detectFeatureTags(changes: FileChange[], to: Snapshot): FeatureTag[] {
-  const paths = changes.filter((change) => change.status !== 'removed').map((change) => change.path)
-  const joinedPaths = paths.join('\n').toLowerCase()
-  const content = searchText(to, paths)
-  const has = (pattern: RegExp) => pattern.test(joinedPaths) || pattern.test(content)
-  const tags: FeatureTag[] = []
-
-  if (has(/lk\.alex-educator|personal[_-]?account|личн(?:ый|ого) кабинет/)) tags.push('student_cabinet')
-  if (has(/auth\/verify|issue_code|verify_code|lk_auth_codes|шестизначн|одноразов/)) tags.push('email_code_auth')
-  if (has(/password_hash|password_verify|войти по паролю|create password|создать пароль/)) tags.push('password_auth')
-  if (has(/auth\/(forgot|reset)|purpose[^\n]{0,20}reset|смены пароля/)) tags.push('password_reset')
-  if (has(/csrf|session_set_cookie_params|httponly|samesite|require_user/)) tags.push('session_security')
-  if (has(/contract\/index|contract_clients|contract_status|открыть договор/)) tags.push('contract_access')
-  if (has(/schedule\/index|data-calendar|calendar-controls|расписание/)) tags.push('schedule_calendar')
-  if (has(/payments\/index|оплаты|чеки/)) tags.push('payments_section')
-  if (has(/homework\/index|домашн(?:ее|яя) задани/)) tags.push('homework_section')
-  if (has(/settings\/index|профиль|изменить пароль|создать пароль/)) tags.push('settings_profile')
-  if (has(/\.sql(?:\n|$)|create table|foreign key|lk_users|lk_auth_codes/)) tags.push('database_schema')
-  if (has(/includes\/layout|page_header|page_footer/)) tags.push('shared_layout')
-  if (has(/data-menu|sidebar[^\n]{0,40}open|@media/)) tags.push('mobile_navigation')
-  if (has(/smtp_send|stream_socket_client|отправить код|отправк[аи] кода/)) tags.push('smtp_delivery')
-  if (has(/install|readme-setup|php 8\.|phpmyadmin|инструкц/)) tags.push('installation_docs')
-
-  return [...new Set(tags)]
-}
-
-function genericTitle(featureTags: FeatureTag[], scope: ScopeAnalysis): string {
-  if (featureTags.includes('student_cabinet')) return 'Добавлен MVP личного кабинета'
-  if (scope.resolvedMode === 'patch') return 'Добавлен отдельный модуль проекта'
-  return 'Обновлена версия проекта'
-}
-
-function inferTransitionCommit(id: string, changes: FileChange[], from: Snapshot, to: Snapshot, scope: ScopeAnalysis): InferredCommit[] {
-  if (!changes.length) return []
-  const ranking = categoryRanking(changes)
-  const category = ranking[0]?.[0] ?? 'other'
-  const categories = ranking.map(([item]) => item)
-  const classificationConfidence = Math.round(55 + ((ranking[0]?.[1] ?? 0) / Math.max(changes.length, 1)) * 40)
-  const featureTags = detectFeatureTags(changes, to)
-  const stats = summarizeStats(changes)
-  const semantic = analyzeSemanticChanges(changes, from, to)
-
-  return [{
-    id: `${id}-${stableId(changes.map((change) => `${change.status}:${change.path}`).join('|'))}`,
-    category,
-    categories,
-    featureTags,
-    title: genericTitle(featureTags, scope),
-    description: `${stats.filesAdded} added, ${stats.filesModified} modified, ${stats.filesRemoved} removed. ${CATEGORY_LABELS[category]}.`,
-    confidence: scope.historyConfidencePercent,
-    classificationConfidence,
-    changes: [...changes].sort((left, right) => left.path.localeCompare(right.path)),
-    semantic,
-  }]
-}
-
 export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: ComparisonMode = 'auto'): VersionTransition {
-  const scope = resolveScope(from, to, requestedMode)
+  const alignment = alignSnapshotRoots(from, to)
+  const comparisonFrom = alignment.from
+  const comparisonTo = alignment.to
+  const scope = resolveScope(comparisonFrom, comparisonTo, requestedMode, alignment)
   const id = `${from.id}-${to.id}`
   if (!scope.comparisonAllowed) {
     return {
@@ -346,21 +384,23 @@ export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: Co
       stats: summarizeStats([]),
       changes: [],
       commits: [],
+      featureTree: [],
     }
   }
 
-  const paths = new Set([...comparablePaths(from), ...comparablePaths(to)])
+  const paths = new Set([...comparablePaths(comparisonFrom), ...comparablePaths(comparisonTo)])
   const changes: FileChange[] = []
 
   for (const path of [...paths].sort()) {
-    const before = from.files[path]
-    const after = to.files[path]
+    const before = comparisonFrom.files[path]
+    const after = comparisonTo.files[path]
 
     if (!before && after) changes.push(makeChange(path, 'added', undefined, after))
     else if (before && !after && scope.removalsReliable) changes.push(makeChange(path, 'removed', before, undefined))
     else if (before && after && before.hash !== after.hash) changes.push(makeChange(path, 'modified', before, after))
   }
 
+  const inferred = inferFeatureCommits(id, changes, comparisonFrom, comparisonTo, scope)
   return {
     id,
     from,
@@ -368,7 +408,8 @@ export function compareSnapshots(from: Snapshot, to: Snapshot, requestedMode: Co
     scope,
     stats: summarizeStats(changes),
     changes,
-    commits: inferTransitionCommit(id, changes, from, to, scope),
+    commits: inferred.commits,
+    featureTree: inferred.featureTree,
   }
 }
 
@@ -419,7 +460,7 @@ export function buildChangelog(report: AnalysisReport): string {
   const lines: string[] = [
     '# Reconstructed change sets',
     '',
-    '> Generated by Git Time Machine. Each archive transition is one reconstructed change set, not a proven original Git commit.',
+    '> Generated by Git Time Machine. Archive transitions are split into reviewable functional clusters; the reconstructed commits are inferred and are not proven original Git commits.',
     '',
   ]
 
@@ -427,6 +468,7 @@ export function buildChangelog(report: AnalysisReport): string {
     lines.push(`## ${transition.to.label} — ${formatDate(transition.to.capturedAt)}`, '')
     lines.push(`- Comparison mode: ${transition.scope.resolvedMode}`)
     lines.push(`- Matching paths: ${transition.scope.commonPathCount}`)
+    if (transition.scope.pathAlignmentApplied) lines.push(`- Path roots aligned: ${transition.scope.fromPathPrefix || '(archive root)'} → ${transition.scope.toPathPrefix || '(archive root)'} (${transition.scope.pathAlignmentConfidencePercent}%)`)
     if (!transition.scope.comparisonAllowed) {
       lines.push('- Transition skipped: the archives could not be confirmed as versions of the same project.', '')
       continue
@@ -436,20 +478,32 @@ export function buildChangelog(report: AnalysisReport): string {
       lines.push('- No supported file changes detected.', '')
       continue
     }
-    const commit = transition.commits[0]
-    lines.push(`- ${commit.title}`)
+    lines.push(`- Functional clusters: ${transition.commits.length}`)
     lines.push(`- History confidence: ${transition.scope.historyConfidence} (${transition.scope.historyConfidencePercent}%)`)
-    lines.push(`- Category confidence: ${commit.classificationConfidence}%`)
-    lines.push(`- Semantic coverage: ${commit.semantic.coveragePercent}% (${commit.semantic.facts.length} facts)`)
-    for (const fact of commit.semantic.facts.filter((item) => item.level === 'functional').slice(0, 16)) {
-      lines.push(`  - ${fact.operation.toUpperCase()} ${fact.code}: ${fact.subject} (${fact.confidence}%)`)
+    if (transition.featureTree.length) {
+      lines.push('- Functional map:')
+      for (const group of transition.featureTree) {
+        lines.push(`  - ${group.title}`)
+        for (const child of group.children) lines.push(`    - ${child.title}: ${child.fileCount} files, ${child.semanticFactCount} facts`)
+      }
     }
-    for (const change of commit.changes.slice(0, 24)) {
-      const marker = change.status === 'added' ? 'A' : change.status === 'removed' ? 'D' : 'M'
-      lines.push(`  - \`${marker}\` \`${change.path}\``)
-    }
-    if (commit.changes.length > 24) lines.push(`  - …and ${commit.changes.length - 24} more files`)
     lines.push('')
+    for (const commit of transition.commits) {
+      lines.push(`### ${commit.title}`, '')
+      lines.push(`- Feature area: ${commit.featureArea}`)
+      lines.push(`- Cluster confidence: ${commit.cluster.confidence}%`)
+      lines.push(`- Semantic coverage: ${commit.semantic.coveragePercent}% (${commit.semantic.facts.length} facts)`)
+      for (const fact of commit.semantic.facts.filter((item) => item.level === 'functional').slice(0, 14)) {
+        lines.push(`  - ${fact.operation.toUpperCase()} ${fact.code}: ${fact.subject} (${fact.confidence}%)`)
+      }
+      for (const change of commit.changes.slice(0, 20)) {
+        const marker = change.status === 'added' ? 'A' : change.status === 'removed' ? 'D' : 'M'
+        lines.push(`  - \`${marker}\` \`${change.path}\``)
+      }
+      if (commit.changes.length > 20) lines.push(`  - …and ${commit.changes.length - 20} more primary files`)
+      if (commit.supportingFiles.length) lines.push(`  - Supporting shared files: ${commit.supportingFiles.length}`)
+      lines.push('')
+    }
   }
 
   return lines.join('\n')

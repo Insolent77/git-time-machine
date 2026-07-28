@@ -2,7 +2,7 @@
 
 > Reconstruct a reviewable development history from dated project archives — entirely in the browser.
 
-Git Time Machine compares ZIP, RAR, 7z, TAR and compressed archive snapshots, detects file and structural changes, analyzes source code semantically, and writes human-readable reconstructed change sets.
+Git Time Machine compares ZIP, RAR, 7z, TAR and compressed archive snapshots, detects file and structural changes, analyzes source code semantically, and builds a functional map and writes human-readable reconstructed commits grouped by product capability.
 
 It does **not** claim to recover the original Git commits. It produces an evidence-based draft and clearly separates confirmed facts, static inferences, generated artifacts, and transitions that cannot safely be compared.
 
@@ -11,6 +11,7 @@ It does **not** claim to recover the original Git commits. It produces an eviden
 - ZIP, RAR, 7z, TAR, GZ, BZ2 and XZ archives
 - Fully local browser processing through JSZip and libarchive.js/WebAssembly
 - Automatic detection of full snapshots versus modules/patches
+- Automatic alignment of wrapper roots such as `www/`, `public_html/` and workspace folders
 - Automatic relationship check before two archives are compared
 - No commit is generated when archives cannot be confirmed as versions of the same project
 - Detection of browser-saved page exports and compiled binary release packages
@@ -19,6 +20,8 @@ It does **not** claim to recover the original Git commits. It produces an eviden
 - Added, modified and reliably removed file detection
 - Functional semantic analysis for PHP, JavaScript, TypeScript, SQL, HTML, CSS and other text formats
 - Functions, classes, routes, API calls, SQL tables, fields, indexes, forms, dependencies, tests and configuration detection
+- Feature clustering into contracts, reviews, leads, students, authentication, cabinet, schedule, homework, payments, communications, database, infrastructure and other coherent areas
+- A functional tree that groups reconstructed commits into product, access, platform and quality branches
 - Human-readable functional commit descriptions with evidence and confidence
 - Explicit fallback descriptions where the exact purpose cannot be determined
 - Five interface languages: English, Russian, Chinese, German and Spanish
@@ -78,11 +81,15 @@ https://YOUR_USERNAME.github.io/git-time-machine/
 3. Profile the archive as source snapshot, browser export, binary package or mixed archive.
 4. Extract project identity hints from domains, manifests and binary names.
 5. Verify that adjacent archives plausibly belong to one project.
-6. Resolve full-snapshot versus module/patch semantics.
-7. Compare hashes and text changes only for relevant project files.
-8. Run structural and functional semantic analysis.
-9. Produce one reconstructed change set per valid archive transition.
-10. Mark evidence, confidence, limitations and items requiring review.
+6. Align project roots when archive wrapper folders differ.
+7. Resolve full-snapshot versus module/patch semantics.
+8. Compare hashes and text changes only for relevant project files.
+9. Run structural and functional semantic analysis.
+10. Score every changed file against feature-specific path, content and semantic signals.
+11. Assign each file to exactly one primary feature cluster and retain shared files as supporting evidence.
+12. Compress repetitive routes, forms, symbols and database fields into readable functional facts.
+13. Build a functional tree and several reviewable reconstructed commits for the transition.
+14. Mark evidence, clustering confidence, history confidence, limitations and items requiring review.
 
 ## Limits
 
@@ -90,6 +97,7 @@ https://YOUR_USERNAME.github.io/git-time-machine/
 - Static analysis cannot prove runtime behavior.
 - Encrypted and multipart archives are not supported.
 - Generated output may hide the original source intent.
+- Functional cluster boundaries and order are heuristic when Git metadata is absent.
 - Original Git commit boundaries, authors and exact timestamps cannot be recovered without Git metadata.
 
 ## License

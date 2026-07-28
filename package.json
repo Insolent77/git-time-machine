@@ -1,9 +1,9 @@
 {
   "name": "git-time-machine",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
-  "description": "Reconstruct scope-aware, functional development history from project archives — fully in the browser.",
+  "description": "Reconstruct scope-aware development history from archives and split it into evidence-based functional commit clusters — fully in the browser.",
   "scripts": {
     "dev": "vite",
     "prepare:libarchive": "node scripts/copy-libarchive-assets.mjs",

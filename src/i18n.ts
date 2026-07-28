@@ -1,4 +1,4 @@
-import type { AnalysisReport, ChangeCategory, ChangeStatus, ComparisonMode, FeatureTag, HistoryConfidence, InferredCommit, ScopeAnalysis, SemanticFact, SemanticFactCode, SemanticOperation, Snapshot, VersionTransition } from './lib/types'
+import type { AnalysisReport, ChangeCategory, ChangeStatus, ComparisonMode, FeatureAreaCode, FeatureGroupCode, FeatureTag, HistoryConfidence, InferredCommit, ScopeAnalysis, SemanticFact, SemanticFactCode, SemanticOperation, Snapshot, VersionTransition } from './lib/types'
 import type { ArchiveAnalysisError, ArchiveErrorCode } from './lib/archive-errors'
 
 export type Language = 'en' | 'ru' | 'zh' | 'de' | 'es'
@@ -251,6 +251,21 @@ export function scopeDiagnostic(language: Language, scope: ScopeAnalysis): { tit
     if (language === 'es') return { title: 'No se confirmó que los archivos pertenezcan al mismo proyecto', body: `No se encontraron rutas, identificadores de proyecto ni archivos fuente idénticos. Se omitió la transición para evitar un commit falso. Identificadores comunes: ${shared}. Selecciona manualmente “Módulo / parche” solo cuando sepas que ambos archivos pertenecen al mismo proyecto.` }
     return { title: 'Archive relationship is not confirmed', body: `No matching paths, project identifiers, or identical source files were found. The transition was skipped to avoid creating a false commit. Shared identifiers: ${shared}. Select “Module / patch” manually only when you know both archives belong to the same project.` }
   }
+  if (scope.pathAlignmentApplied) {
+    const fromPrefix = scope.fromPathPrefix || 'корень архива'
+    const toPrefix = scope.toPathPrefix || 'корень архива'
+    const suffix = scope.resolvedMode === 'patch'
+      ? ` После выравнивания архив обработан как модуль/патч; ${scope.ignoredPotentialRemovals} отсутствующих путей не считаются удалёнными.`
+      : ''
+    if (language === 'ru') return {
+      title: 'Корни проекта автоматически выровнены',
+      body: `Структура упаковки архивов различалась. Для сравнения сопоставлены «${fromPrefix}» → «${toPrefix}»; найдено общих путей: ${scope.commonPathCount}. Уверенность выравнивания: ${scope.pathAlignmentConfidencePercent}%.${suffix}`,
+    }
+    return {
+      title: 'Project roots were aligned automatically',
+      body: `Archive wrapper folders differed. Comparison aligned “${scope.fromPathPrefix || 'archive root'}” → “${scope.toPathPrefix || 'archive root'}”; matching paths: ${scope.commonPathCount}. Alignment confidence: ${scope.pathAlignmentConfidencePercent}%.${scope.resolvedMode === 'patch' ? ` The transition remains in module/patch mode and ${scope.ignoredPotentialRemovals} absent paths are not counted as deletions.` : ''}`,
+    }
+  }
   if (scope.resolvedMode !== 'patch') return null
   if (language === 'ru') {
     return {
@@ -265,6 +280,31 @@ export function scopeDiagnostic(language: Language, scope: ScopeAnalysis): { tit
     title: 'Archive scopes do not match',
     body: `Previous archive: ${scope.fromFileCount} files; current archive: ${scope.toFileCount}; matching paths: ${scope.commonPathCount}. The current archive is treated as a module/patch, so ${scope.ignoredPotentialRemovals} absent paths are not counted as deletions.`,
   }
+}
+
+
+const FEATURE_AREA_LABELS: Record<Language, Record<FeatureAreaCode, string>> = {
+  en: { foundation: 'Application foundation', public_site: 'Public website', lead_requests: 'Leads and requests', contracts: 'Electronic contracts', reviews: 'Reviews', admin_core: 'Administration panel', students: 'Students and grades', authentication: 'Authentication and security', personal_account: 'Student cabinet', schedule: 'Schedule and calendar', homework: 'Homework', payments: 'Payments and receipts', communications: 'Email and notifications', settings: 'Profile settings', database: 'Database', infrastructure: 'Infrastructure and configuration', quality: 'Tests and quality', documentation: 'Documentation', assets: 'Media and assets', other: 'Other components' },
+  ru: { foundation: 'Основа приложения', public_site: 'Публичный сайт', lead_requests: 'Заявки и обращения', contracts: 'Электронные договоры', reviews: 'Отзывы', admin_core: 'Административная панель', students: 'Ученики и успеваемость', authentication: 'Авторизация и безопасность', personal_account: 'Личный кабинет', schedule: 'Расписание и календарь', homework: 'Домашние задания', payments: 'Оплаты и чеки', communications: 'Email и уведомления', settings: 'Настройки профиля', database: 'База данных', infrastructure: 'Инфраструктура и конфигурация', quality: 'Тесты и контроль качества', documentation: 'Документация', assets: 'Медиа и ресурсы', other: 'Прочие компоненты' },
+  zh: { foundation: '应用基础', public_site: '公开网站', lead_requests: '线索与申请', contracts: '电子合同', reviews: '评价', admin_core: '管理后台', students: '学生与成绩', authentication: '身份验证与安全', personal_account: '学生个人中心', schedule: '日程与日历', homework: '作业', payments: '支付与收据', communications: '邮件与通知', settings: '个人资料设置', database: '数据库', infrastructure: '基础设施与配置', quality: '测试与质量', documentation: '文档', assets: '媒体资源', other: '其他组件' },
+  de: { foundation: 'Anwendungsgrundlage', public_site: 'Öffentliche Website', lead_requests: 'Anfragen und Leads', contracts: 'Elektronische Verträge', reviews: 'Bewertungen', admin_core: 'Administrationsbereich', students: 'Schüler und Leistungen', authentication: 'Authentifizierung und Sicherheit', personal_account: 'Schülerportal', schedule: 'Zeitplan und Kalender', homework: 'Hausaufgaben', payments: 'Zahlungen und Belege', communications: 'E-Mail und Benachrichtigungen', settings: 'Profileinstellungen', database: 'Datenbank', infrastructure: 'Infrastruktur und Konfiguration', quality: 'Tests und Qualität', documentation: 'Dokumentation', assets: 'Medien und Ressourcen', other: 'Weitere Komponenten' },
+  es: { foundation: 'Base de la aplicación', public_site: 'Sitio público', lead_requests: 'Solicitudes y contactos', contracts: 'Contratos electrónicos', reviews: 'Reseñas', admin_core: 'Panel administrativo', students: 'Alumnos y calificaciones', authentication: 'Autenticación y seguridad', personal_account: 'Área del alumno', schedule: 'Horario y calendario', homework: 'Tareas', payments: 'Pagos y recibos', communications: 'Correo y notificaciones', settings: 'Ajustes del perfil', database: 'Base de datos', infrastructure: 'Infraestructura y configuración', quality: 'Pruebas y calidad', documentation: 'Documentación', assets: 'Medios y recursos', other: 'Otros componentes' },
+}
+
+const FEATURE_GROUP_LABELS: Record<Language, Record<FeatureGroupCode, string>> = {
+  en: { product: 'Product capabilities', access: 'Access and communications', platform: 'Platform and infrastructure', quality: 'Quality and documentation' },
+  ru: { product: 'Продуктовые возможности', access: 'Доступ и коммуникации', platform: 'Платформа и инфраструктура', quality: 'Качество и документация' },
+  zh: { product: '产品能力', access: '访问与通信', platform: '平台与基础设施', quality: '质量与文档' },
+  de: { product: 'Produktfunktionen', access: 'Zugriff und Kommunikation', platform: 'Plattform und Infrastruktur', quality: 'Qualität und Dokumentation' },
+  es: { product: 'Funciones del producto', access: 'Acceso y comunicaciones', platform: 'Plataforma e infraestructura', quality: 'Calidad y documentación' },
+}
+
+export function featureAreaLabel(language: Language, area: FeatureAreaCode): string {
+  return FEATURE_AREA_LABELS[language][area]
+}
+
+export function featureGroupLabel(language: Language, group: FeatureGroupCode): string {
+  return FEATURE_GROUP_LABELS[language][group]
 }
 
 const SEMANTIC_NOUNS: Record<Language, Record<SemanticFactCode, string>> = {
@@ -403,6 +443,7 @@ function verificationBullets(language: Language, transition: VersionTransition, 
   if (language === 'ru') {
     const lines = [
       `Для всех анализируемых файлов рассчитаны SHA-256; совпадающих путей между архивами — ${scope.commonPathCount}.`,
+      ...(scope.pathAlignmentApplied ? [`Корни проекта выровнены: «${scope.fromPathPrefix || 'корень архива'}» → «${scope.toPathPrefix || 'корень архива'}»; уверенность ${scope.pathAlignmentConfidencePercent}%.`] : []),
       scope.commonPathCount
         ? `Из совпадающих путей изменено ${scope.modifiedCommonPathCount}, без изменений — ${scope.unchangedCommonPathCount}.`
         : 'Совпадающих путей нет, поэтому сравнение старого и нового содержимого одного и того же файла не выполнялось.',
@@ -417,12 +458,13 @@ function verificationBullets(language: Language, transition: VersionTransition, 
     if (!scope.removalsReliable) lines.push(`Удаления не подтверждаются: ${scope.ignoredPotentialRemovals} отсутствующих путей намеренно исключены из списка удалённых.`)
     lines.push('Семантические выводы построены статическим анализом сигнатур, маршрутов, SQL, конфигурации и характерных конструкций; приложение не выполняло исходный код.')
     lines.push('PHP lint, миграции базы, интерфейс и автотесты не запускались; указанные функции подтверждаются кодом, но их работоспособность требует отдельного запуска.')
-    lines.push('Один переход между архивами представлен одним реконструированным набором изменений, а не набором выдуманных исторических коммитов.')
+    lines.push(`Переход разделён на функциональный кластер «${featureAreaLabel(language, commit.featureArea)}» по путям файлов и семантическим фактам; это реконструкция, а не подтверждённый исходный Git-коммит.`)
     return lines
   }
 
   const lines = [
     `SHA-256 checksums were calculated for all analyzed files; matching paths across archives: ${scope.commonPathCount}.`,
+    ...(scope.pathAlignmentApplied ? [`Project roots were aligned: “${scope.fromPathPrefix || 'archive root'}” → “${scope.toPathPrefix || 'archive root'}”; confidence ${scope.pathAlignmentConfidencePercent}%.`] : []),
     scope.commonPathCount ? `${scope.modifiedCommonPathCount} matching paths changed and ${scope.unchangedCommonPathCount} stayed unchanged.` : 'There are no matching paths, so old/new content of the same file could not be compared.',
     `Semantic analysis covered ${semantic.analyzedTextFiles} of ${semantic.candidateTextFiles} affected text files; description coverage: ${semantic.coveragePercent}%.`,
     `Semantic facts: ${semantic.facts.length}; detected languages and formats: ${semantic.detectedLanguages.join(', ') || 'unknown'}.`,
@@ -434,6 +476,7 @@ function verificationBullets(language: Language, transition: VersionTransition, 
   if (!scope.removalsReliable) lines.push(`Deletions are not confirmed; ${scope.ignoredPotentialRemovals} absent paths were intentionally excluded.`)
   lines.push('Semantic statements are produced by static analysis of symbols, routes, SQL, configuration, and recognizable code constructs; the source code was not executed.')
   lines.push('Linters, migrations, UI checks, and automated tests were not run; runtime behavior still requires verification.')
+  lines.push(`This archive transition was split into the “${featureAreaLabel(language, commit.featureArea)}” functional cluster from file paths and semantic facts; it is a reconstruction, not a proven original Git commit.`)
   return lines
 }
 
@@ -442,16 +485,7 @@ function padLabel(label: string, width = 18): string {
 }
 
 function dossierType(language: Language, commit: InferredCommit): string {
-  if (commit.featureTags.includes('student_cabinet')) {
-    if (language === 'ru') return 'MVP личного кабинета'
-    if (language === 'zh') return '个人中心 MVP'
-    if (language === 'de') return 'MVP des Benutzerportals'
-    if (language === 'es') return 'MVP del área personal'
-    return 'User cabinet MVP'
-  }
-  const functional = commit.semantic.facts.filter((fact) => fact.level === 'functional').slice(0, 3)
-  if (functional.length) return functional.map((fact) => SEMANTIC_NOUNS[language][fact.code]).join(' / ')
-  return commit.categories.slice(0, 4).map((category) => categoryLabel(language, category)).join(' / ')
+  return featureAreaLabel(language, commit.featureArea)
 }
 
 export function buildCommitDossier(options: {
@@ -469,12 +503,16 @@ export function buildCommitDossier(options: {
   const version = `LOCAL-${String(serial).padStart(4, '0')}`
   const source = sourceNote.trim() || `${transition.from.sourceName} → ${transition.to.sourceName}`
   const files = commit.changes.map((change) => `  • ${change.path}`)
+  const supportingFiles = commit.supportingFiles.slice(0, 24).map((path) => `  • ${path}`)
+  if (commit.supportingFiles.length > 24) supportingFiles.push(`  • … ${language === 'ru' ? `ещё ${commit.supportingFiles.length - 24}` : `${commit.supportingFiles.length - 24} more`}`)
   const functional = semanticBullets(language, commit, 'functional').map((line) => `  • ${line}`)
   const structural = semanticBullets(language, commit, 'structural').map((line) => `  • ${line}`)
   const fallback = semanticBullets(language, commit, 'fallback').map((line) => `  • ${line}`)
   const fileSummary = fileSummaryBullets(language, transition, commit).map((line) => `  • ${line}`)
   const verification = verificationBullets(language, transition, commit).map((line) => `  • ${line}`)
   const modeLabel = language === 'ru' ? 'Режим' : 'Mode'
+  const clusterLabel = language === 'ru' ? 'Кластер' : 'Cluster'
+  const clusterConfidenceLabel = language === 'ru' ? 'Уверенность кластера' : 'Cluster confidence'
 
   const blocks: string[] = [
     `${padLabel(c.version)}${version}`,
@@ -484,13 +522,16 @@ export function buildCommitDossier(options: {
     `${padLabel(c.status)}${commitStatusLabel(language, status)}`,
     `${padLabel(c.source)}${source}`,
     `${padLabel(modeLabel)}${resolvedModeLabel(language, transition.scope)}`,
+    `${padLabel(clusterLabel)}${featureGroupLabel(language, commit.cluster.group)} → ${featureAreaLabel(language, commit.featureArea)}`,
+    `${padLabel(clusterConfidenceLabel)}${commit.cluster.confidence}%`,
   ]
 
   if (functional.length) blocks.push('', `${sections.functional}:`, ...functional)
   if (structural.length) blocks.push('', `${sections.structural}:`, ...structural)
   if (fallback.length) blocks.push('', `${sections.fallback}:`, ...fallback)
   blocks.push('', `${sections.fileSummary}:`, ...fileSummary)
-  blocks.push('', `${c.affectedFiles}:`, ...files)
+  blocks.push('', `${language === 'ru' ? 'ОСНОВНЫЕ ЗАТРОНУТЫЕ ФАЙЛЫ' : c.affectedFiles}:`, ...files)
+  if (supportingFiles.length) blocks.push('', `${language === 'ru' ? 'ОБЩИЕ ПОДДЕРЖИВАЮЩИЕ ФАЙЛЫ' : 'SHARED SUPPORTING FILES'}:`, ...supportingFiles)
   blocks.push('', `${c.verification}:`, ...verification)
   return blocks.join('\n')
 }
@@ -534,6 +575,20 @@ function buildSkippedTransitionNotice(transition: VersionTransition, language: L
   ].join('\n')
 }
 
+function buildFeatureMapNotice(transition: VersionTransition, language: Language): string {
+  if (!transition.featureTree.length) return ''
+  const lines = [language === 'ru' ? 'КАРТА ФУНКЦИОНАЛЬНОСТИ' : 'FUNCTIONAL MAP']
+  for (const group of transition.featureTree) {
+    lines.push(`  ${featureGroupLabel(language, group.group)}`)
+    for (const child of group.children) {
+      lines.push(`    ├─ ${featureAreaLabel(language, child.area)} — ${child.fileCount} ${language === 'ru' ? 'файл(ов)' : 'files'}, ${child.semanticFactCount} ${language === 'ru' ? 'фактов' : 'facts'}, ${child.confidence}%`)
+    }
+  }
+  if (language === 'ru') lines.push('', 'Порядок кластеров восстановлен эвристически по зависимостям: основа и БД → публичные функции → доступ → кабинет → продуктовые модули → инфраструктура и проверки.')
+  else lines.push('', 'Cluster order is inferred heuristically from dependencies: foundation and database → public features → access → cabinet → product modules → infrastructure and quality.')
+  return lines.join('\n')
+}
+
 export function buildDetailedReport(options: {
   report: AnalysisReport
   language: Language
@@ -548,6 +603,8 @@ export function buildDetailedReport(options: {
       chunks.push(buildSkippedTransitionNotice(transition, options.language))
       continue
     }
+    const featureMap = buildFeatureMapNotice(transition, options.language)
+    if (featureMap) chunks.push(featureMap)
     for (const commit of transition.commits) {
       chunks.push(buildCommitDossier({ ...options, transition, commit, serial }))
       serial += 1
