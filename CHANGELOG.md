@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.1 — 2026-07-28
+
+### Added
+
+- Evidence-scoped semantic facts: each functional cluster receives facts only from its primary files or from an explicitly matched product schema fact
+- Automatic `Небольшие исправления` cluster for tiny unrelated edits that do not justify separate reconstructed commits
+- Capability-based commit titles for dev databases, contract contact history, student contacts, grade charts, admin calendars, cabinet calendars and student schedule creation
+- Conflict resolution that collapses simultaneous add/remove claims for the same semantic concept into one reviewed modification
+- Smoke tests for documentation isolation, supporting-evidence scoping, minor-fix merging, conflict resolution and capability titles
+
+### Changed
+
+- README, prefixed changelog files such as `LOCAL_CHANGELOG.txt`, ROADMAP, AGENTS and other documentation are analyzed only as documentation and can no longer create product-feature claims
+- Technical routes, forms, API calls, JSON responses and redirects are summarized in the structural section instead of flooding functional changes
+- Feature-map entries and dossier `Type` now use the reconstructed capability title rather than only the broad area name
+- Supporting shared files no longer contribute unrelated search, sorting, localization or navigation facts to another feature cluster; noisy UI heuristics from shared utility files are suppressed
+- Feature-rule fingerprints now use the matched line rather than a wide surrounding window, reducing false “modified feature” claims
+- Displayed build number is now `0.8.1` in all interface languages
+
+### Fixed
+
+- Contradictory statements such as “added personal account” and “removed personal account” caused by changelog text, including prefixed files such as `LOCAL_CHANGELOG.txt`
+- One-line request and review edits becoming separate low-value commits
+- Merged semantic facts retaining evidence from unrelated feature areas
+- Generic `GET current page`, `PAGE /...`, JSON and redirect items appearing as top-level product functionality
+
 ## 0.8.0 — 2026-07-28
 
 ### Added

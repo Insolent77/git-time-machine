@@ -22,7 +22,7 @@ It does **not** claim to recover the original Git commits. It produces an eviden
 - Functions, classes, routes, API calls, SQL tables, fields, indexes, forms, dependencies, tests and configuration detection
 - Feature clustering into contracts, reviews, leads, students, authentication, cabinet, schedule, homework, payments, communications, database, infrastructure and other coherent areas
 - A functional tree that groups reconstructed commits into product, access, platform and quality branches
-- Human-readable functional commit descriptions with evidence and confidence
+- Human-readable capability-based commit titles and functional descriptions with evidence and confidence
 - Explicit fallback descriptions where the exact purpose cannot be determined
 - Five interface languages: English, Russian, Chinese, German and Spanish
 - Detailed TXT and JSON exports
@@ -86,10 +86,12 @@ https://YOUR_USERNAME.github.io/git-time-machine/
 8. Compare hashes and text changes only for relevant project files.
 9. Run structural and functional semantic analysis.
 10. Score every changed file against feature-specific path, content and semantic signals.
-11. Assign each file to exactly one primary feature cluster and retain shared files as supporting evidence.
-12. Compress repetitive routes, forms, symbols and database fields into readable functional facts.
-13. Build a functional tree and several reviewable reconstructed commits for the transition.
-14. Mark evidence, clustering confidence, history confidence, limitations and items requiring review.
+11. Assign each file to exactly one primary feature cluster.
+12. Split merged semantic evidence back by primary feature and isolate documentation from product claims.
+13. Resolve contradictory add/remove claims and move technical routes/forms/API details into a compact structural summary.
+14. Merge tiny unrelated edits into one `Minor fixes` cluster instead of inventing several weak commits.
+15. Generate capability-based commit titles, a functional tree and reviewable reconstructed commits.
+16. Mark evidence, clustering confidence, history confidence, limitations and items requiring review.
 
 ## Limits
 
@@ -97,7 +99,7 @@ https://YOUR_USERNAME.github.io/git-time-machine/
 - Static analysis cannot prove runtime behavior.
 - Encrypted and multipart archives are not supported.
 - Generated output may hide the original source intent.
-- Functional cluster boundaries and order are heuristic when Git metadata is absent.
+- Functional cluster boundaries and order are heuristic when Git metadata is absent. Tiny edits may be merged into a single minor-fixes commit.
 - Original Git commit boundaries, authors and exact timestamps cannot be recovered without Git metadata.
 
 ## License

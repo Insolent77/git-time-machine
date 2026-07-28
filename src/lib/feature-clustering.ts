@@ -12,6 +12,7 @@ import type {
   SemanticFact,
   SemanticFactCode,
   SemanticLevel,
+  SemanticOperation,
   Snapshot,
 } from './types'
 import { analyzeSemanticChanges } from './semantic.js'
@@ -58,6 +59,7 @@ const AREA_LABELS_RU: Record<FeatureAreaCode, string> = {
   infrastructure: 'Инфраструктура и конфигурация',
   quality: 'Тесты и контроль качества',
   documentation: 'Документация',
+  minor_fixes: 'Небольшие исправления',
   assets: 'Медиа и ресурсы',
   other: 'Прочие компоненты',
 }
@@ -172,6 +174,10 @@ const AREA_RULES: AreaRule[] = [
     factCodes: ['documentation_section'],
   },
   {
+    area: 'minor_fixes', group: 'quality', sequence: 165,
+    pathPatterns: [],
+  },
+  {
     area: 'assets', group: 'platform', sequence: 180,
     pathPatterns: [/(?:^|\/)assets?(?:\/|$)/i, /(?:^|\/)uploads?(?:\/|$)/i, /\.(?:png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm|pdf|docx|zip)$/i],
   },
@@ -205,7 +211,7 @@ const FEATURE_CODE_BY_AREA: Record<FeatureAreaCode, SemanticFactCode> = {
   reviews: 'code_logic', admin_core: 'code_logic', students: 'code_logic', authentication: 'authentication',
   personal_account: 'user_cabinet', schedule: 'schedule_section', homework: 'homework_section', payments: 'payments_section',
   communications: 'email_delivery', settings: 'profile_settings', database: 'database_table', infrastructure: 'configuration',
-  quality: 'test_case', documentation: 'documentation_section', assets: 'file_content', other: 'code_logic',
+  quality: 'test_case', documentation: 'documentation_section', minor_fixes: 'code_logic', assets: 'file_content', other: 'code_logic',
 }
 
 function stableId(value: string): string {
@@ -243,7 +249,7 @@ function explicitAreaFromPath(path: string): FeatureAreaCode | undefined {
     ['payments', /payment|receipt|invoice|billing/],
     ['authentication', /(?:^|\/)(?:auth)(?:\/|$)|login|logout|forgot|reset|verify|admin-auth|session/],
     ['communications', /email|smtp|imap|message|notification/],
-    ['lead_requests', /submit[_-]?lead|course[_-]?request|consultation[_-]?request/],
+    ['lead_requests', /(?:^|\/)requests?(?:\.|\/|$)|submit[_-]?lead|course[_-]?request|consultation[_-]?request/],
     ['students', /(?:^|\/)students?(?:\.|\/|$)|student[_-]?(?:grade|contact)|grade|attendance/],
     ['settings', /(?:^|\/)settings?(?:\/|\.|$)|profile|preferences/],
   ]
@@ -287,7 +293,7 @@ function scoreText(path: string, content: string, category?: ChangeCategory, fac
 
 function assignmentForChange(change: FileChange, from: Snapshot, to: Snapshot, factsByPath: Map<string, SemanticFact[]>): Assignment {
   const fileFacts = factsByPath.get(change.path) ?? []
-  const scored = scoreText(change.path, activeContent(change, from, to), change.category)
+  const scored = scoreText(change.path, activeContent(change, from, to), change.category, fileFacts.map((fact) => fact.code))
   const best = scored[0]
   const second = scored[1]?.score ?? 0
   const margin = Math.max(0, best.score - second)
@@ -303,38 +309,23 @@ function assignmentForChange(change: FileChange, from: Snapshot, to: Snapshot, f
 function explicitAreaFromSubject(subject: string): FeatureAreaCode | undefined {
   const value = subject.toLowerCase()
   const hints: Array<[FeatureAreaCode, RegExp]> = [
+    ['foundation', /dev_environment|dev_database|database_(?:pdo|identifier)|ensure_dev_database|is_dev_admin_request/],
     ['contracts', /contract|agreement/], ['reviews', /review/], ['homework', /homework|assignment|submission|learning_stream/],
-    ['schedule', /schedule|lesson/], ['communications', /email|message|notification/], ['students', /student|grade|attendance/],
+    ['schedule', /schedule|lesson/], ['communications', /smtp|email|message|notification/], ['students', /student|grade|attendance/],
     ['payments', /payment|receipt|invoice/], ['lead_requests', /course_request|consultation|lead/], ['authentication', /auth|password|session|token|verification|otp|code/],
   ]
   return hints.find(([, pattern]) => pattern.test(value))?.[0]
 }
 
-function assignmentForFact(fact: SemanticFact, primaryAssignments: Map<string, Assignment>): FeatureAreaCode {
-  const path = fact.evidence[0]?.path ?? ''
-  const pathAssignment = primaryAssignments.get(path)
-  if (fact.level === 'fallback' || fact.code === 'browser_snapshot' || fact.code === 'external_dependency_bundle') {
-    return pathAssignment?.area ?? 'other'
-  }
-  const hint = FACT_AREA_HINTS[fact.code]
-  const scored = scoreText(path, `${fact.subject}\n${fact.details?.join('\n') ?? ''}`, undefined, [fact.code])
-  const scores = new Map<FeatureAreaCode, number>()
-  for (const item of scored) scores.set(item.area, item.score)
-  if (pathAssignment) scores.set(pathAssignment.area, (scores.get(pathAssignment.area) ?? 0) + 7)
-  if (hint) scores.set(hint, (scores.get(hint) ?? 0) + 9)
-
-  // Product-specific database names should follow the product rather than a generic database bucket.
-  const explicitSubjectArea = explicitAreaFromSubject(fact.subject)
-  if (explicitSubjectArea) {
-    const bonus = fact.code.startsWith('database_') ? 52 : 20
-    scores.set(explicitSubjectArea, (scores.get(explicitSubjectArea) ?? 0) + bonus)
-    if (fact.code.startsWith('database_')) scores.set('database', Math.max(0, (scores.get('database') ?? 0) - 18))
-  }
-
-  return [...scores.entries()].sort((left, right) => right[1] - left[1] || RULE_BY_AREA.get(left[0])!.sequence - RULE_BY_AREA.get(right[0])!.sequence)[0]?.[0]
-    ?? pathAssignment?.area
-    ?? hint
-    ?? 'other'
+function isDocumentationPath(path: string): boolean {
+  const normalized = path.toLowerCase()
+  const fileName = normalized.split('/').at(-1) ?? normalized
+  const namedDocument = /(?:^|[._-])(?:readme|changelog|roadmap|license|agents?|contributing|security)(?:[._-]|$)/i.test(fileName)
+  const documentationExtension = /\.(?:md|mdx|rst|adoc)$/i.test(fileName)
+  const namedTextDocument = namedDocument && (documentationExtension || /\.(?:txt|text)$/i.test(fileName) || !fileName.includes('.'))
+  return /(?:^|\/)docs?(?:\/|$)/i.test(normalized)
+    || documentationExtension
+    || namedTextDocument
 }
 
 function dominantOperation(changes: FileChange[]): FileChange['status'] {
@@ -354,8 +345,8 @@ function titleForArea(area: FeatureAreaCode, operation: FileChange['status']): s
     homework: 'Добавлена система домашних заданий', payments: 'Добавлен раздел оплат и чеков',
     communications: 'Добавлены email-уведомления и сообщения', settings: 'Добавлены настройки профиля',
     database: 'Расширена структура базы данных', infrastructure: 'Настроена инфраструктура проекта',
-    quality: 'Добавлены проверки и тесты', documentation: 'Подготовлена документация', assets: 'Добавлены медиа-ресурсы',
-    other: 'Добавлены прочие компоненты',
+    quality: 'Добавлены проверки и тесты', documentation: 'Подготовлена документация', minor_fixes: 'Исправлены небольшие изменения',
+    assets: 'Добавлены медиа-ресурсы', other: 'Добавлены прочие компоненты',
   }
   if (operation === 'added') return added[area]
   if (operation === 'removed') return `Удалён функциональный блок «${AREA_LABELS_RU[area]}»`
@@ -388,24 +379,252 @@ function detectFeatureTags(area: FeatureAreaCode, facts: SemanticFact[]): Featur
   return [...new Set(tags)]
 }
 
-function synthesizeSummaryFact(area: FeatureAreaCode, changes: FileChange[], confidence: number): SemanticFact {
-  const operation = dominantOperation(changes)
+function cloneFactForArea(fact: SemanticFact, area: FeatureAreaCode, evidence: SemanticFact['evidence']): SemanticFact {
+  return {
+    ...fact,
+    id: `${fact.id}-${area}-${stableId(evidence.map((item) => `${item.path}:${item.line ?? 0}`).join('|'))}`,
+    evidence,
+  }
+}
+
+function partitionFactsByArea(
+  facts: SemanticFact[],
+  assignments: Map<string, Assignment>,
+  redirectedAreas: Map<FeatureAreaCode, FeatureAreaCode>,
+): Map<FeatureAreaCode, SemanticFact[]> {
+  const output = new Map<FeatureAreaCode, SemanticFact[]>()
+  const add = (area: FeatureAreaCode, fact: SemanticFact, evidence: SemanticFact['evidence']) => {
+    if (!evidence.length) return
+    const finalArea = redirectedAreas.get(area) ?? area
+    const items = output.get(finalArea) ?? []
+    items.push(cloneFactForArea(fact, finalArea, evidence))
+    output.set(finalArea, items)
+  }
+
+  for (const fact of facts) {
+    const documentationEvidence = fact.evidence.filter((item) => isDocumentationPath(item.path))
+    let sourceEvidence = fact.evidence.filter((item) => !isDocumentationPath(item.path))
+    if (documentationEvidence.length) {
+      add('documentation', fact, documentationEvidence)
+      if (!sourceEvidence.length) continue
+    }
+
+    const explicitArea = explicitAreaFromSubject(fact.subject)
+    const subjectRoutable = fact.code.startsWith('database_')
+      || ['function', 'class', 'interface', 'type_definition', 'component', 'environment_variable', 'test_case'].includes(fact.code)
+    if (explicitArea && subjectRoutable) {
+      add(explicitArea, fact, sourceEvidence)
+      continue
+    }
+
+    if (NOISY_SHARED_UTILITY_CODES.has(fact.code)) {
+      sourceEvidence = sourceEvidence.filter((item) => !isSharedUtilityPath(item.path))
+      if (!sourceEvidence.length) continue
+    }
+
+    const grouped = new Map<FeatureAreaCode, SemanticFact['evidence']>()
+    for (const evidence of sourceEvidence) {
+      const area = assignments.get(evidence.path)?.area
+        ?? FACT_AREA_HINTS[fact.code]
+        ?? 'other'
+      const items = grouped.get(area) ?? []
+      items.push(evidence)
+      grouped.set(area, items)
+    }
+    for (const [area, evidence] of grouped) add(area, fact, evidence)
+  }
+  return output
+}
+
+function normalizeFactSubject(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function resolveFactConflicts(facts: SemanticFact[]): SemanticFact[] {
+  const groups = new Map<string, SemanticFact[]>()
+  for (const fact of facts) {
+    const key = `${fact.code}|${normalizeFactSubject(fact.subject)}`
+    const items = groups.get(key) ?? []
+    items.push(fact)
+    groups.set(key, items)
+  }
+
+  const output: SemanticFact[] = []
+  for (const [key, items] of groups) {
+    const operations = new Set(items.map((item) => item.operation))
+    if (operations.size <= 1) {
+      const first = items[0]
+      const evidence = items.flatMap((item) => item.evidence)
+        .filter((item, index, all) => all.findIndex((other) => other.path === item.path && other.line === item.line) === index)
+      const details = [...new Set(items.flatMap((item) => item.details ?? []))].slice(0, 12)
+      output.push({
+        ...first,
+        confidence: Math.max(...items.map((item) => item.confidence)),
+        evidence,
+        ...(details.length ? { details } : {}),
+      })
+      continue
+    }
+
+    const first = items.sort((left, right) => right.confidence - left.confidence)[0]
+    const evidence = items.flatMap((item) => item.evidence)
+      .filter((item, index, all) => all.findIndex((other) => other.path === item.path && other.line === item.line) === index)
+    const details = [...new Set(items.flatMap((item) => item.details ?? []))].slice(0, 12)
+    output.push({
+      ...first,
+      id: `resolved-${stableId(key)}`,
+      operation: 'modified',
+      certainty: items.every((item) => item.certainty === 'fact') ? 'fact' : 'inference',
+      confidence: Math.max(65, Math.min(94, Math.max(...items.map((item) => item.confidence)) - 3)),
+      evidence,
+      ...(details.length ? { details } : {}),
+    })
+  }
+  return output
+}
+
+const TECHNICAL_FUNCTIONAL_CODES = new Set<SemanticFactCode>([
+  'route', 'api_request', 'form', 'json_api', 'redirect_navigation',
+])
+
+const NOISY_SHARED_UTILITY_CODES = new Set<SemanticFactCode>([
+  'user_cabinet', 'contract_section', 'schedule_section', 'payments_section', 'homework_section', 'profile_settings',
+  'shared_navigation', 'search', 'filtering', 'sorting', 'pagination', 'modal_dialog', 'responsive_layout',
+  'animation', 'layout_system', 'localization', 'browser_storage', 'caching', 'drag_and_drop',
+])
+
+function isSharedUtilityPath(path: string): boolean {
+  return /(?:^|\/)(?:includes?|lib|utils?|helpers?)(?:\/|$).*?(?:functions?|bootstrap|helpers?|utils?)\.(?:php|js|ts)$/i.test(path)
+    || /(?:^|\/)[^/]*functions?\.php$/i.test(path)
+}
+
+const HIGH_VALUE_CODES = new Set<SemanticFactCode>([
+  'database_table', 'database_column', 'database_index', 'database_relation', 'input_field',
+  'one_time_code', 'password_security', 'csrf_protection', 'session_security', 'authorization',
+  'file_upload', 'file_download', 'email_delivery', 'test_case', 'environment_variable',
+])
+
+const EXACT_STRUCTURAL_CODES = new Set<SemanticFactCode>([
+  'function', 'class', 'interface', 'type_definition', 'component',
+  'database_table', 'database_column', 'database_index', 'database_relation', 'input_field',
+  'dependency', 'build_script', 'environment_variable', 'test_case',
+])
+
+function isSignificantCluster(area: FeatureAreaCode, changes: FileChange[], facts: SemanticFact[]): boolean {
+  if (area === 'minor_fixes') return true
+  const lineDelta = changes.reduce((sum, change) => sum + change.addedLines + change.removedLines, 0)
+  const addedOrRemovedFiles = changes.filter((change) => change.status !== 'modified').length
+  const meaningfulFunctional = facts.filter((fact) => fact.level === 'functional'
+    && !TECHNICAL_FUNCTIONAL_CODES.has(fact.code)
+    && fact.confidence >= 78).length
+  const highValueFacts = facts.filter((fact) => HIGH_VALUE_CODES.has(fact.code) && fact.confidence >= 82).length
+  const exactStructural = facts.filter((fact) => EXACT_STRUCTURAL_CODES.has(fact.code) && fact.confidence >= 90).length
+
+  if (area === 'documentation') return addedOrRemovedFiles > 0 || changes.length >= 2 || lineDelta >= 12
+  if (addedOrRemovedFiles > 0) return true
+  if (highValueFacts > 0) return true
+  if (exactStructural >= 2) return true
+  if (meaningfulFunctional >= 2 && lineDelta >= 12) return true
+  if (lineDelta >= 40) return true
+  if (changes.length >= 3 && lineDelta >= 20) return true
+  return false
+}
+
+function semanticOperation(changes: FileChange[], facts: SemanticFact[]): SemanticOperation {
+  const meaningful = facts.filter((fact) => !TECHNICAL_FUNCTIONAL_CODES.has(fact.code) && fact.level !== 'fallback')
+  const added = meaningful.filter((fact) => fact.operation === 'added').length
+  const removed = meaningful.filter((fact) => fact.operation === 'removed').length
+  if (added > 0 && removed === 0) return 'added'
+  if (removed > 0 && added === 0) return 'removed'
+  return dominantOperation(changes)
+}
+
+interface ClusterCapability {
+  title: string
+  subject: string
+  operation: SemanticOperation
+}
+
+function hasFact(facts: SemanticFact[], pattern: RegExp, codes?: SemanticFactCode[]): boolean {
+  return facts.some((fact) => (!codes || codes.includes(fact.code))
+    && (pattern.test(fact.subject) || fact.details?.some((detail) => pattern.test(detail)) || fact.evidence.some((item) => pattern.test(item.path))))
+}
+
+function hasPath(changes: FileChange[], pattern: RegExp): boolean {
+  return changes.some((change) => pattern.test(change.path))
+}
+
+function clusterCapability(
+  area: FeatureAreaCode,
+  changes: FileChange[],
+  facts: SemanticFact[],
+  relatedAreas: FeatureAreaCode[],
+): ClusterCapability {
+  const operation = semanticOperation(changes, facts)
+  if (area === 'foundation' && hasFact(facts, /dev_environment_meta|ensure_dev_database|dev_database_ready|database_pdo/i)) {
+    return { title: 'Добавлена поддержка отдельной базы данных для dev-окружения', subject: 'поддержка отдельной базы данных для dev-окружения', operation: 'added' }
+  }
+  if (area === 'contracts') {
+    const history = hasFact(facts, /contract_contact_changes/i)
+    const phone = hasFact(facts, /phone_display|detectPhoneCountry|formatNationalPhone|renderPhoneCountries|syncPhone/i)
+    if (history && phone) return { title: 'Добавлена история изменений контактов и расширена форма телефона в договоре', subject: 'история изменений контактов и международный формат телефона в договоре', operation: 'added' }
+    if (history) return { title: 'Добавлена история изменений контактных данных договора', subject: 'история изменений контактных данных договора', operation: 'added' }
+    if (phone) return { title: 'Расширена форма телефона в электронном договоре', subject: 'международный формат телефона в электронном договоре', operation: 'added' }
+  }
+  if (area === 'students') {
+    const contacts = hasPath(changes, /update-student-contact/i) || hasFact(facts, /phone|email|contact/i)
+    const grades = hasPath(changes, /student-grade-chart/i) || hasFact(facts, /movingAverage|renderRangeCalendar|grade/i)
+    if (contacts && grades) return { title: 'Добавлены редактирование контактов и график успеваемости ученика', subject: 'редактирование контактов и график успеваемости ученика', operation: 'added' }
+    if (contacts) return { title: 'Добавлено редактирование контактных данных ученика', subject: 'редактирование контактных данных ученика', operation: 'added' }
+    if (grades) return { title: 'Добавлен график успеваемости ученика', subject: 'график успеваемости ученика', operation: 'added' }
+  }
+  if (area === 'admin_core' && (hasFact(facts, /loadCalendar|calendar/i) || hasPath(changes, /admin\.js|admin-theme/i))) {
+    return { title: 'Обновлены календарь и интерфейс административной панели', subject: 'календарь и интерфейс административной панели', operation: 'modified' }
+  }
+  if (area === 'personal_account' && hasFact(facts, /DashboardCalendar|dashboardDateKey|openDashboardPopover|LessonPopover/i)) {
+    return { title: 'Обновлён календарь личного кабинета', subject: 'календарь личного кабинета', operation: 'modified' }
+  }
+  if (area === 'schedule' && hasPath(changes, /save-student-schedule\.php/i)) {
+    return { title: 'Добавлено создание расписания из карточки ученика', subject: 'создание расписания из карточки ученика', operation: 'added' }
+  }
+  if (area === 'homework' && changes.every((change) => change.status === 'modified')) {
+    return { title: 'Уточнена работа с домашними заданиями', subject: 'работа с домашними заданиями', operation: 'modified' }
+  }
+  if (area === 'minor_fixes') {
+    const shortLabels: Partial<Record<FeatureAreaCode, string>> = {
+      lead_requests: 'заявок', reviews: 'отзывов', authentication: 'авторизации', public_site: 'публичного сайта',
+      admin_core: 'административной панели', students: 'учеников', schedule: 'расписания', homework: 'домашних заданий',
+      contracts: 'договоров', personal_account: 'личного кабинета', infrastructure: 'конфигурации', other: 'проекта',
+    }
+    const labels = relatedAreas.map((item) => shortLabels[item]).filter((item): item is string => Boolean(item))
+    const subject = labels.length ? `небольшие изменения в разделах ${labels.join(', ')}` : 'небольшие изменения проекта'
+    return { title: `Исправлены ${subject}`, subject, operation: 'modified' }
+  }
+  if (area === 'documentation') {
+    if (changes.every((change) => change.status === 'removed')) {
+      return { title: 'Удалены служебные файлы документации проекта', subject: 'служебные файлы документации проекта', operation: 'removed' }
+    }
+    return { title: 'Обновлена служебная документация проекта', subject: 'служебная документация проекта', operation }
+  }
+  return { title: titleForArea(area, operation), subject: AREA_LABELS_RU[area], operation }
+}
+
+function synthesizeSummaryFact(capability: ClusterCapability, area: FeatureAreaCode, changes: FileChange[], confidence: number): SemanticFact {
   const evidence = changes.slice(0, 8).map((change) => ({ path: change.path }))
   return {
-    id: `cluster-${stableId(`${area}:${operation}:${changes.map((change) => change.path).join('|')}`)}`,
+    id: `cluster-${stableId(`${area}:${capability.operation}:${changes.map((change) => change.path).join('|')}`)}`,
     code: FEATURE_CODE_BY_AREA[area],
-    operation,
+    operation: capability.operation,
     certainty: 'inference',
     level: 'functional',
     confidence: Math.max(62, Math.min(94, confidence - 2)),
-    subject: AREA_LABELS_RU[area],
-    details: [`сгруппировано файлов: ${changes.length}`],
+    subject: capability.subject,
     evidence,
   }
 }
 
 function summarizeFactGroup(facts: SemanticFact[], area: FeatureAreaCode, code: SemanticFactCode, level: SemanticLevel, label: string): SemanticFact {
-  const operation = facts[0]?.operation ?? 'modified'
+  const operation = facts.some((fact) => fact.operation === 'modified') ? 'modified' : facts[0]?.operation ?? 'modified'
   const details = facts.map((fact) => fact.subject).filter(Boolean).slice(0, 12)
   const evidence = facts.flatMap((fact) => fact.evidence).filter((item, index, all) => all.findIndex((other) => other.path === item.path && other.line === item.line) === index).slice(0, 12)
   return {
@@ -421,25 +640,38 @@ function summarizeFactGroup(facts: SemanticFact[], area: FeatureAreaCode, code: 
   }
 }
 
-function compressFacts(area: FeatureAreaCode, facts: SemanticFact[], changes: FileChange[], clusterConfidence: number): { facts: SemanticFact[]; omitted: number } {
+function compressFacts(
+  area: FeatureAreaCode,
+  facts: SemanticFact[],
+  changes: FileChange[],
+  clusterConfidence: number,
+  capability: ClusterCapability,
+): { facts: SemanticFact[]; omitted: number } {
+  const resolved = resolveFactConflicts(facts)
   const scopedFacts = area === 'documentation'
-    ? facts.filter((fact) => fact.level === 'fallback' || ['documentation_section', 'installation_setup', 'file_content'].includes(fact.code))
-    : facts
-  const output: SemanticFact[] = [synthesizeSummaryFact(area, changes, clusterConfidence)]
+    ? resolved.filter((fact) => fact.level === 'fallback' || ['documentation_section', 'installation_setup', 'file_content'].includes(fact.code))
+    : area === 'minor_fixes'
+      ? resolved.filter((fact) => fact.level === 'fallback' || fact.level === 'structural' || TECHNICAL_FUNCTIONAL_CODES.has(fact.code))
+      : resolved.filter((fact) => !isDocumentationPath(fact.evidence[0]?.path ?? ''))
+  const output: SemanticFact[] = [synthesizeSummaryFact(capability, area, changes, clusterConfidence)]
   const consumed = new Set<string>()
+
+  const technical = scopedFacts.filter((fact) => TECHNICAL_FUNCTIONAL_CODES.has(fact.code))
+  if (technical.length) {
+    output.push(summarizeFactGroup(technical, area, 'code_logic', 'structural', 'технические обработчики и точки взаимодействия'))
+    for (const fact of technical) consumed.add(fact.id)
+  }
+
   const groupIfLarge = (codes: SemanticFactCode[], level: SemanticLevel, label: string, threshold: number) => {
-    const group = scopedFacts.filter((fact) => codes.includes(fact.code) && fact.level === level)
+    const group = scopedFacts.filter((fact) => codes.includes(fact.code) && fact.level === level && !consumed.has(fact.id))
     if (group.length < threshold) return
     output.push(summarizeFactGroup(group, area, codes[0], level, label))
     for (const fact of group) consumed.add(fact.id)
   }
 
-  groupIfLarge(['route'], 'functional', 'серверные маршруты', 7)
-  groupIfLarge(['api_request'], 'functional', 'API-запросы', 7)
-  groupIfLarge(['form'], 'functional', 'формы и действия', 7)
-  groupIfLarge(['function', 'class', 'interface', 'type_definition', 'component'], 'structural', 'основные программные сущности', 22)
-  groupIfLarge(['database_column'], 'structural', 'поля базы данных', 18)
-  groupIfLarge(['database_index', 'database_relation'], 'structural', 'индексы и связи базы данных', 12)
+  groupIfLarge(['function', 'class', 'interface', 'type_definition', 'component'], 'structural', 'основные программные сущности', 16)
+  groupIfLarge(['database_column'], 'structural', 'поля базы данных', 12)
+  groupIfLarge(['database_index', 'database_relation'], 'structural', 'индексы и связи базы данных', 8)
 
   const remaining = scopedFacts.filter((fact) => !consumed.has(fact.id))
   const priority = (fact: SemanticFact): number => {
@@ -451,9 +683,12 @@ function compressFacts(area: FeatureAreaCode, facts: SemanticFact[], changes: Fi
   }
   remaining.sort((left, right) => priority(left) - priority(right) || right.confidence - left.confidence || left.subject.localeCompare(right.subject))
 
-  const maxFacts = 90
+  const maxFacts = 70
   output.push(...remaining.slice(0, Math.max(0, maxFacts - output.length)))
-  return { facts: output, omitted: Math.max(0, facts.length - scopedFacts.length) + Math.max(0, scopedFacts.length - consumed.size - Math.max(0, maxFacts - 1)) }
+  return {
+    facts: output,
+    omitted: Math.max(0, facts.length - scopedFacts.length) + Math.max(0, remaining.length - Math.max(0, maxFacts - output.length)),
+  }
 }
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
@@ -470,12 +705,12 @@ function semanticForCluster(
   from: Snapshot,
   to: Snapshot,
   clusterConfidence: number,
-  globalTruncated: number,
+  capability: ClusterCapability,
 ): SemanticAnalysis {
-  const compressed = compressFacts(area, areaFacts, changes, clusterConfidence)
-  const paths = [...new Set([...changes.map((change) => change.path), ...supportingFiles])]
-  const textPaths = paths.filter((path) => (to.files[path] ?? from.files[path])?.kind === 'text')
-  const binaryFiles = paths.length - textPaths.length
+  const compressed = compressFacts(area, areaFacts, changes, clusterConfidence, capability)
+  const primaryPaths = [...new Set(changes.map((change) => change.path))]
+  const textPaths = primaryPaths.filter((path) => (to.files[path] ?? from.files[path])?.kind === 'text')
+  const binaryFiles = primaryPaths.length - textPaths.length
   const represented = new Set(compressed.facts.flatMap((fact) => fact.evidence.map((item) => item.path)))
   const fallbackPaths = new Set(compressed.facts.filter((fact) => fact.level === 'fallback').flatMap((fact) => fact.evidence.map((item) => item.path)))
   const languages = new Set<string>()
@@ -485,11 +720,11 @@ function semanticForCluster(
   }
   const analyzedTextFiles = textPaths.filter((path) => (to.files[path]?.content ?? from.files[path]?.content) !== undefined).length
   const representedTextFiles = textPaths.filter((path) => represented.has(path) || changes.some((change) => change.path === path)).length
-  const truncatedFacts = compressed.omitted + globalTruncated
   const warnings: string[] = []
   if (fallbackPaths.size) warnings.push(`${fallbackPaths.size} text files required generic fallback descriptions.`)
   if (binaryFiles) warnings.push(`${binaryFiles} binary files were not semantically inspected.`)
-  if (truncatedFacts) warnings.push(`${truncatedFacts} lower-priority semantic facts were summarized or omitted.`)
+  if (compressed.omitted) warnings.push(`${compressed.omitted} lower-priority semantic facts were summarized or omitted.`)
+  if (supportingFiles.length) warnings.push(`${supportingFiles.length} shared files supplied only feature-specific evidence; unrelated facts from them were excluded.`)
   return {
     facts: compressed.facts,
     analyzedTextFiles,
@@ -499,17 +734,17 @@ function semanticForCluster(
     binaryFiles,
     detectedLanguages: [...languages].sort(),
     coveragePercent: textPaths.length === 0 ? 100 : Math.round((representedTextFiles / textPaths.length) * 100),
-    truncatedFacts,
+    truncatedFacts: compressed.omitted,
     warnings,
   }
 }
 
-function descriptionForCluster(area: FeatureAreaCode, semantic: SemanticAnalysis, changes: FileChange[]): string {
-  const functional = semantic.facts.filter((fact) => fact.level === 'functional' && !fact.id.startsWith('cluster-')).slice(0, 3)
+function descriptionForCluster(capability: ClusterCapability, semantic: SemanticAnalysis, changes: FileChange[]): string {
+  const functional = semantic.facts.filter((fact) => fact.level === 'functional' && !fact.id.startsWith('cluster-')).slice(0, 2)
   const subjects = functional.map((fact) => fact.subject).filter(Boolean)
   return subjects.length
-    ? `${AREA_LABELS_RU[area]}: ${subjects.join('; ')}. Затронуто основных файлов: ${changes.length}.`
-    : `${AREA_LABELS_RU[area]}. Затронуто основных файлов: ${changes.length}.`
+    ? `${capability.title}. Дополнительно подтверждено: ${subjects.join('; ')}. Основных файлов: ${changes.length}.`
+    : `${capability.title}. Основных файлов: ${changes.length}.`
 }
 
 function buildFeatureTree(commits: InferredCommit[]): FeatureTreeNode[] {
@@ -525,9 +760,9 @@ function buildFeatureTree(commits: InferredCommit[]): FeatureTreeNode[] {
       fileCount: groupCommits.reduce((sum, commit) => sum + commit.changes.length, 0),
       semanticFactCount: groupCommits.reduce((sum, commit) => sum + commit.semantic.facts.length, 0),
       children: groupCommits.map((commit) => ({
-        id: `feature-${commit.featureArea}`,
+        id: `feature-${commit.featureArea}-${commit.id}`,
         area: commit.featureArea,
-        title: AREA_LABELS_RU[commit.featureArea],
+        title: commit.title,
         commitId: commit.id,
         confidence: commit.cluster.confidence,
         fileCount: commit.changes.length,
@@ -559,8 +794,21 @@ export function inferFeatureCommits(
   const assignments = new Map<string, Assignment>()
   for (const change of changes) assignments.set(change.path, assignmentForChange(change, from, to, factsByPath))
 
-  // A schema file that contains entities for exactly one product feature belongs to that feature.
-  // Multi-domain migrations remain in the database cluster and become supporting evidence for product clusters.
+  for (const change of changes) {
+    if (!/(?:^|\/)includes\/functions\.php$/i.test(change.path)) continue
+    const fileFacts = factsByPath.get(change.path) ?? []
+    if (!fileFacts.some((fact) => explicitAreaFromSubject(fact.subject) === 'foundation')) continue
+    const current = assignments.get(change.path)
+    if (!current) continue
+    assignments.set(change.path, {
+      ...current,
+      area: 'foundation',
+      confidence: Math.max(84, current.confidence),
+      signals: [...current.signals, 'shared-core:dev-database'].slice(0, 6),
+      secondary: [...new Set(['database' as FeatureAreaCode, 'contracts' as FeatureAreaCode, ...current.secondary])].slice(0, 4),
+    })
+  }
+
   for (const change of changes) {
     const assignment = assignments.get(change.path)
     if (assignment?.area !== 'database') continue
@@ -577,21 +825,46 @@ export function inferFeatureCommits(
     }
   }
 
-  // A generic "other" bucket is folded into the application foundation when possible.
   if ([...assignments.values()].some((assignment) => assignment.area === 'foundation')) {
     for (const [path, assignment] of assignments) {
       if (assignment.area === 'other') assignments.set(path, { ...assignment, area: 'foundation', confidence: Math.max(52, assignment.confidence - 8), signals: [...assignment.signals, 'fallback:foundation'] })
     }
   }
 
-  const factsByArea = new Map<FeatureAreaCode, SemanticFact[]>()
-  for (const fact of globalSemantic.facts) {
-    const area = assignmentForFact(fact, assignments)
-    const items = factsByArea.get(area) ?? []
-    items.push(fact)
-    factsByArea.set(area, items)
+  const initialChangesByArea = new Map<FeatureAreaCode, FileChange[]>()
+  for (const change of changes) {
+    const area = assignments.get(change.path)?.area ?? 'other'
+    const items = initialChangesByArea.get(area) ?? []
+    items.push(change)
+    initialChangesByArea.set(area, items)
+  }
+  const noRedirects = new Map<FeatureAreaCode, FeatureAreaCode>()
+  const initialFactsByArea = partitionFactsByArea(globalSemantic.facts, assignments, noRedirects)
+
+  const redirectedAreas = new Map<FeatureAreaCode, FeatureAreaCode>()
+  const minorSourceAreas: FeatureAreaCode[] = []
+  for (const [area, areaChanges] of initialChangesByArea) {
+    if (area === 'minor_fixes' || area === 'documentation') continue
+    const areaFacts = resolveFactConflicts(initialFactsByArea.get(area) ?? [])
+    if (!isSignificantCluster(area, areaChanges, areaFacts)) {
+      redirectedAreas.set(area, 'minor_fixes')
+      minorSourceAreas.push(area)
+    }
   }
 
+  if (minorSourceAreas.length) {
+    for (const [path, assignment] of assignments) {
+      if (!redirectedAreas.has(assignment.area)) continue
+      assignments.set(path, {
+        ...assignment,
+        area: 'minor_fixes',
+        confidence: Math.max(58, assignment.confidence - 4),
+        signals: [...assignment.signals, `merged:${redirectedAreas.get(assignment.area)}`].slice(0, 6),
+      })
+    }
+  }
+
+  const factsByArea = partitionFactsByArea(globalSemantic.facts, assignments, redirectedAreas)
   const changesByArea = new Map<FeatureAreaCode, FileChange[]>()
   for (const change of changes) {
     const area = assignments.get(change.path)?.area ?? 'other'
@@ -604,7 +877,7 @@ export function inferFeatureCommits(
   for (const rule of AREA_RULES) {
     const areaChanges = changesByArea.get(rule.area) ?? []
     if (!areaChanges.length) continue
-    const areaFacts = factsByArea.get(rule.area) ?? []
+    const areaFacts = resolveFactConflicts(factsByArea.get(rule.area) ?? [])
     const primaryPaths = new Set(areaChanges.map((change) => change.path))
     const supportingFiles = [...new Set(areaFacts.flatMap((fact) => fact.evidence.map((item) => item.path)))]
       .filter((path) => !primaryPaths.has(path) && changes.some((change) => change.path === path))
@@ -613,12 +886,14 @@ export function inferFeatureCommits(
     const clusterConfidence = Math.round(areaAssignments.reduce((sum, assignment) => sum + assignment.confidence, 0) / Math.max(areaAssignments.length, 1))
     const relatedCounts = new Map<FeatureAreaCode, number>()
     for (const assignment of areaAssignments) for (const secondary of assignment.secondary) relatedCounts.set(secondary, (relatedCounts.get(secondary) ?? 0) + 1)
-    const relatedAreas = [...relatedCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4).map(([area]) => area)
+    const relatedAreas = rule.area === 'minor_fixes'
+      ? [...new Set(minorSourceAreas)]
+      : [...relatedCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4).map(([area]) => area)
     const signalPaths = areaChanges.slice(0, 5).map((change) => change.path)
     const signals = [...new Set([...areaAssignments.flatMap((assignment) => assignment.signals), ...signalPaths])].slice(0, 8)
-    const semantic = semanticForCluster(rule.area, areaFacts, areaChanges, supportingFiles, from, to, clusterConfidence, 0)
+    const capability = clusterCapability(rule.area, areaChanges, areaFacts, relatedAreas)
+    const semantic = semanticForCluster(rule.area, areaFacts, areaChanges, supportingFiles, from, to, clusterConfidence, capability)
     const categories = categoryRanking(areaChanges)
-    const operation = dominantOperation(areaChanges)
     const id = `${transitionId}-${String(rule.sequence).padStart(3, '0')}-${rule.area}-${stableId(areaChanges.map((change) => `${change.status}:${change.path}`).join('|'))}`
     const cluster: FeatureCluster = {
       area: rule.area,
@@ -639,8 +914,8 @@ export function inferFeatureCommits(
       featureArea: rule.area,
       cluster,
       supportingFiles,
-      title: titleForArea(rule.area, operation),
-      description: descriptionForCluster(rule.area, semantic, areaChanges),
+      title: capability.title,
+      description: descriptionForCluster(capability, semantic, areaChanges),
       confidence: scope.historyConfidencePercent,
       classificationConfidence: clusterConfidence,
       changes: [...areaChanges].sort((left, right) => left.path.localeCompare(right.path)),

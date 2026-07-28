@@ -93,8 +93,9 @@ const semanticTransition = compareSnapshots(semanticOld, semanticNew, 'full')
 const semanticFacts = semanticTransition.commits.flatMap((commit) => commit.semantic.facts)
 assert.ok(semanticFacts.some((fact) => fact.code === 'function' && fact.operation === 'added' && fact.subject === 'verifyOtp'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'code_logic' && fact.operation === 'modified' && fact.subject === 'login'))
-assert.ok(semanticFacts.some((fact) => fact.code === 'route' && fact.subject === 'POST /login'))
-assert.ok(semanticFacts.some((fact) => fact.code === 'api_request' && fact.subject === 'POST /api/session'))
+assert.ok(semanticFacts.some((fact) => fact.code === 'code_logic' && fact.level === 'structural' && fact.details?.includes('POST /login')))
+assert.ok(semanticFacts.some((fact) => fact.code === 'code_logic' && fact.level === 'structural' && fact.details?.includes('POST /api/session')))
+assert.ok(!semanticFacts.some((fact) => fact.level === 'functional' && ['route', 'api_request', 'form', 'json_api', 'redirect_navigation'].includes(fact.code)))
 assert.ok(semanticFacts.some((fact) => fact.code === 'database_table' && fact.subject === 'auth_codes'))
 assert.ok(semanticFacts.some((fact) => fact.code === 'dependency' && fact.subject === 'zod'))
 assert.ok(semanticTransition.commits.every((commit) => commit.semantic.coveragePercent === 100))
@@ -176,6 +177,127 @@ assert.ok(featureAreas.includes('homework'))
 assert.ok(featureTransition.featureTree.length >= 2)
 assert.equal(new Set(featureTransition.commits.flatMap((commit) => commit.changes.map((change) => change.path))).size, featureTransition.changes.length)
 assert.equal(featureTransition.commits.flatMap((commit) => commit.changes).length, featureTransition.changes.length)
+
+
+
+// v0.8.1: documentation is evidence only for documentation and must never create product claims.
+const docsOld = {
+  id: 'docs-old', label: 'Docs old', sourceName: 'docs-old.zip', capturedAt: '2026-07-10T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['docs-project'], sourceFiles: 3, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'README.md': { path: 'README.md', size: 1, hash: 'docs-readme-old', kind: 'text', content: '# Project\n## Notes' },
+    'LOCAL_CHANGELOG.txt': { path: 'LOCAL_CHANGELOG.txt', size: 1, hash: 'docs-local-old', kind: 'text', content: 'Удалено: личный кабинет, расписание и домашние задания' },
+    'admin/review.php': { path: 'admin/review.php', size: 1, hash: 'docs-review-old', kind: 'text', content: '<?php echo "old";' },
+  },
+}
+const docsNew = {
+  id: 'docs-new', label: 'Docs new', sourceName: 'docs-new.zip', capturedAt: '2026-07-11T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['docs-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'README.md': { path: 'README.md', size: 1, hash: 'docs-readme-new', kind: 'text', content: '# Project\n## Удалено: личный кабинет, расписание и домашние задания' },
+    'admin/review.php': { path: 'admin/review.php', size: 1, hash: 'docs-review-new', kind: 'text', content: '<?php echo "new";' },
+  },
+}
+const docsTransition = compareSnapshots(docsOld, docsNew, 'full')
+const docsProductFacts = docsTransition.commits
+  .filter((commit) => commit.featureArea !== 'documentation')
+  .flatMap((commit) => commit.semantic.facts)
+assert.ok(!docsProductFacts.some((fact) => fact.evidence.some((item) => item.path === 'README.md')))
+assert.ok(!docsProductFacts.some((fact) => fact.operation === 'removed' && ['user_cabinet', 'schedule_section', 'homework_section'].includes(fact.code)))
+assert.ok(docsTransition.commits.find((commit) => commit.featureArea === 'documentation')?.semantic.facts.every((fact) => fact.code === 'documentation_section' || fact.code === 'file_content'))
+assert.ok(docsTransition.commits.find((commit) => commit.featureArea === 'documentation')?.changes.some((change) => change.path === 'LOCAL_CHANGELOG.txt'))
+
+// v0.8.1: tiny unrelated changes are combined into one honest minor-fixes commit.
+const tinyOld = {
+  id: 'tiny-old', label: 'Tiny old', sourceName: 'tiny-old.zip', capturedAt: '2026-07-12T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['tiny-project'], sourceFiles: 3, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'admin/request.php': { path: 'admin/request.php', size: 1, hash: 'tiny-request-old', kind: 'text', content: '<?php echo "a";' },
+    'admin/review.php': { path: 'admin/review.php', size: 1, hash: 'tiny-review-old', kind: 'text', content: '<?php echo "b";' },
+    'auth/login.php': { path: 'auth/login.php', size: 1, hash: 'tiny-login-old', kind: 'text', content: '<?php echo "c";' },
+  },
+}
+const tinyNew = {
+  id: 'tiny-new', label: 'Tiny new', sourceName: 'tiny-new.zip', capturedAt: '2026-07-13T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['tiny-project'], sourceFiles: 3, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'admin/request.php': { path: 'admin/request.php', size: 1, hash: 'tiny-request-new', kind: 'text', content: '<?php echo "aa";' },
+    'admin/review.php': { path: 'admin/review.php', size: 1, hash: 'tiny-review-new', kind: 'text', content: '<?php echo "bb";' },
+    'auth/login.php': { path: 'auth/login.php', size: 1, hash: 'tiny-login-new', kind: 'text', content: '<?php echo "cc";' },
+  },
+}
+const tinyTransition = compareSnapshots(tinyOld, tinyNew, 'full')
+assert.deepEqual(tinyTransition.commits.map((commit) => commit.featureArea), ['minor_fixes'])
+assert.ok(tinyTransition.commits[0].cluster.relatedAreas.includes('lead_requests'))
+assert.ok(tinyTransition.commits[0].cluster.relatedAreas.includes('reviews'))
+assert.ok(tinyTransition.commits[0].cluster.relatedAreas.includes('authentication'))
+assert.match(tinyTransition.commits[0].title, /Исправлены небольшие изменения/)
+assert.equal(tinyTransition.commits[0].semantic.facts.filter((fact) => fact.level === 'functional').length, 1)
+
+// v0.8.1: generic facts merged across files are scoped back to each primary cluster.
+const scopedOld = {
+  id: 'scoped-old', label: 'Scoped old', sourceName: 'scoped-old.zip', capturedAt: '2026-07-14T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['scoped-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'admin/student.php': { path: 'admin/student.php', size: 1, hash: 'student-old', kind: 'text', content: '<?php function page() { return 1; }' },
+    'contract/index.php': { path: 'contract/index.php', size: 1, hash: 'contract-old', kind: 'text', content: '<?php function page() { return 1; }' },
+  },
+}
+const scopedNew = {
+  id: 'scoped-new', label: 'Scoped new', sourceName: 'scoped-new.zip', capturedAt: '2026-07-15T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['scoped-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'admin/student.php': { path: 'admin/student.php', size: 1, hash: 'student-new', kind: 'text', content: '<?php function page() { $searchQuery = "student"; return 2; }' },
+    'contract/index.php': { path: 'contract/index.php', size: 1, hash: 'contract-new', kind: 'text', content: '<?php function page() { $searchQuery = "contract"; return 2; }' },
+  },
+}
+const scopedTransition = compareSnapshots(scopedOld, scopedNew, 'full')
+for (const commit of scopedTransition.commits.filter((item) => ['students', 'contracts'].includes(item.featureArea))) {
+  for (const fact of commit.semantic.facts.filter((item) => item.code === 'search')) {
+    assert.ok(fact.evidence.every((item) => commit.changes.some((change) => change.path === item.path)))
+  }
+}
+
+// v0.8.1: opposite broad claims are collapsed into one modified fact.
+const conflictOld = {
+  id: 'conflict-old', label: 'Conflict old', sourceName: 'conflict-old.zip', capturedAt: '2026-07-16T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['conflict-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'contract/first.php': { path: 'contract/first.php', size: 1, hash: 'conflict-first-old', kind: 'text', content: '<?php echo "contract_clients";' },
+    'contract/second.php': { path: 'contract/second.php', size: 1, hash: 'conflict-second-old', kind: 'text', content: '<?php echo "empty";' },
+  },
+}
+const conflictNew = {
+  id: 'conflict-new', label: 'Conflict new', sourceName: 'conflict-new.zip', capturedAt: '2026-07-17T12:00:00.000Z', capturePrecision: 'date', totalBytes: 2, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['conflict-project'], sourceFiles: 2, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'contract/first.php': { path: 'contract/first.php', size: 1, hash: 'conflict-first-new', kind: 'text', content: '<?php echo "empty";' },
+    'contract/second.php': { path: 'contract/second.php', size: 1, hash: 'conflict-second-new', kind: 'text', content: '<?php echo "contract_clients";' },
+  },
+}
+const conflictTransition = compareSnapshots(conflictOld, conflictNew, 'full')
+const contractFacts = conflictTransition.commits.find((commit) => commit.featureArea === 'contracts')?.semantic.facts ?? []
+const broadContractFacts = contractFacts.filter((fact) => fact.code === 'contract_section')
+assert.ok(broadContractFacts.length <= 2)
+assert.ok(!(broadContractFacts.some((fact) => fact.operation === 'added') && broadContractFacts.some((fact) => fact.operation === 'removed')))
+
+// v0.8.1: commit titles describe the detected product capability, not only the area name.
+const titleOld = {
+  id: 'title-old', label: 'Title old', sourceName: 'title-old.zip', capturedAt: '2026-07-18T12:00:00.000Z', capturePrecision: 'date', totalBytes: 1, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['title-project'], sourceFiles: 1, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: { 'admin/student.php': { path: 'admin/student.php', size: 1, hash: 'title-student-old', kind: 'text', content: '<?php echo "student";' } },
+}
+const titleNew = {
+  id: 'title-new', label: 'Title new', sourceName: 'title-new.zip', capturedAt: '2026-07-19T12:00:00.000Z', capturePrecision: 'date', totalBytes: 3, ignoredCount: 0,
+  profile: { kind: 'source', identityTokens: ['title-project'], sourceFiles: 3, artifactFiles: 0, thirdPartyFiles: 0, generatedFiles: 0, binaryFiles: 0, warnings: [] },
+  files: {
+    'admin/student.php': { path: 'admin/student.php', size: 1, hash: 'title-student-new', kind: 'text', content: '<?php echo "student";' },
+    'admin/update-student-contact.php': { path: 'admin/update-student-contact.php', size: 1, hash: 'title-contact-new', kind: 'text', content: '<?php $phone = $_POST["phone"]; $email = $_POST["email"];' },
+    'admin/assets/student-grade-chart.js': { path: 'admin/assets/student-grade-chart.js', size: 1, hash: 'title-grade-new', kind: 'text', content: 'function movingAverage(){} function renderRangeCalendar(){}' },
+  },
+}
+const titleTransition = compareSnapshots(titleOld, titleNew, 'full')
+assert.equal(titleTransition.commits.find((commit) => commit.featureArea === 'students')?.title, 'Добавлены редактирование контактов и график успеваемости ученика')
 
 console.log('Core smoke test passed:', {
   transitions: report.transitions.length,

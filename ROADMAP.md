@@ -30,7 +30,9 @@
 - [x] Function, class, endpoint, and database-model changes
 - [x] Feature-level summaries instead of path-only grouping
 - [x] Functional tree and multi-commit clustering for large transitions
-- [x] Primary versus shared supporting files
+- [x] Primary files with evidence-scoped shared schema facts
+- [x] Documentation isolation, contradiction resolution and minor-fix merging
+- [x] Capability-based reconstructed commit titles
 - [ ] Dependency risk scoring and migration safety analysis
 
 ## 1.0 — Git reconstruction toolkit

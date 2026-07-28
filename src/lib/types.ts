@@ -41,6 +41,7 @@ export type FeatureAreaCode =
   | 'infrastructure'
   | 'quality'
   | 'documentation'
+  | 'minor_fixes'
   | 'assets'
   | 'other'
 

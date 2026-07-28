@@ -131,6 +131,17 @@ function languageOf(path: string): string | undefined {
   return LANGUAGE_BY_EXTENSION[extensionOf(path)]
 }
 
+function isDocumentationPath(path: string): boolean {
+  const normalized = path.toLowerCase()
+  const fileName = normalized.split('/').at(-1) ?? normalized
+  const namedDocument = /(?:^|[._-])(?:readme|changelog|roadmap|license|agents?|contributing|security)(?:[._-]|$)/i.test(fileName)
+  const documentationExtension = /\.(?:md|mdx|rst|adoc)$/i.test(fileName)
+  const namedTextDocument = namedDocument && (documentationExtension || /\.(?:txt|text)$/i.test(fileName) || !fileName.includes('.'))
+  return /(?:^|\/)docs?(?:\/|$)/i.test(normalized)
+    || documentationExtension
+    || namedTextDocument
+}
+
 function lineNumberAt(content: string, index: number): number {
   return content.slice(0, Math.max(index, 0)).split('\n').length
 }
@@ -608,7 +619,7 @@ function featurePresence(rule: FeatureRule, content: string, path: string): { pr
   for (const pattern of rule.patterns) {
     pattern.lastIndex = 0
     const match = pattern.exec(content)
-    if (match) return { present: true, index: match.index, excerpt: excerptAt(content, match.index), fingerprint: shortHash(content.slice(Math.max(0, match.index - 120), Math.min(content.length, match.index + 520)).replace(/\s+/g, ' ')) }
+    if (match) return { present: true, index: match.index, excerpt: excerptAt(content, match.index), fingerprint: shortHash(excerptAt(content, match.index).replace(/\s+/g, ' ')) }
   }
   const pathMatch = content.length > 0 && (rule.pathPatterns?.some((pattern) => pattern.test(path)) ?? false)
   return { present: pathMatch, index: 0, ...(pathMatch ? { excerpt: path, viaPath: true } : {}) }
@@ -649,6 +660,27 @@ function analyzeFile(change: FileChange, from: Snapshot, to: Snapshot, facts: Se
 
   if (activeFile?.analysisRole === 'artifact') {
     analyzeBrowserSnapshot(change, activeFile, facts)
+    return { represented: true, ...(language ? { language } : {}) }
+  }
+
+  if (isDocumentationPath(change.path)) {
+    analyzeDocumentation(change.path, beforeContent, afterContent, facts)
+    if (facts.length === startCount) {
+      addFact(facts, {
+        code: 'file_content',
+        operation: change.status,
+        certainty: change.status === 'modified' ? 'inference' : 'fact',
+        level: 'fallback',
+        confidence: change.status === 'modified' ? 72 : 90,
+        subject: change.path,
+        path: change.path,
+        details: [
+          'documentation-only change',
+          `${change.addedLines} lines added`,
+          `${change.removedLines} lines removed`,
+        ],
+      })
+    }
     return { represented: true, ...(language ? { language } : {}) }
   }
 
